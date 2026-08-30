@@ -1,13 +1,10 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { addAuditLog, createOrder, getOrderDetailById, getOrdersForUser, getUserById, getExchangeRate, getProductById, updateOrderInvoice } from '../data/store.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { uploadDir } from '../utils/storage.js';
 
 export const ordersRouter = express.Router();
 
@@ -56,7 +53,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
     const user = await getUserById(req.user.id);
     const exchangeRate = await getExchangeRate();
     const invoiceBuffer = await createInvoicePdf(result.order, invoiceItems, user, { exchangeRate });
-    const invoicePath = path.join(__dirname, '..', 'uploads', `invoice-${result.order.id}.pdf`);
+    const invoicePath = path.join(uploadDir, `invoice-${result.order.id}.pdf`);
     fs.writeFileSync(invoicePath, invoiceBuffer);
     await updateOrderInvoice(result.order.id, invoicePath, `INV-${String(result.order.id).padStart(4, '0')}`);
     res.status(201).json({ order: result.order, invoiceBuffer: invoiceBuffer.toString('base64') });

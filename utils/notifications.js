@@ -1,10 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { uploadDir } from './storage.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const notificationsFile = path.join(__dirname, '..', 'uploads', 'notifications.json');
+const notificationsFile = path.join(uploadDir, 'notifications.json');
 
 const ensureFile = () => {
   const dir = path.dirname(notificationsFile);

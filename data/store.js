@@ -1,17 +1,10 @@
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import pkg from 'pg';
 import { sendOrderApprovedEmail } from '../utils/mail.js';
 import { createNotification } from '../utils/notifications.js';
+import { uploadDir } from '../utils/storage.js';
 
 const { Pool } = pkg;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const uploadDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const pool = new Pool({
   host: process.env.PGHOST || 'localhost',
