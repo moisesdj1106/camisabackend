@@ -16,7 +16,7 @@ adminRouter.get('/dashboard', authMiddleware, adminOnly, async (req, res) => {
   res.json(summary);
 });
 
-adminRouter.get('/exchange-rate', authMiddleware, adminOnly, async (req, res) => {
+adminRouter.get('/exchange-rate', async (req, res) => {
   const rate = await getExchangeRate();
   res.json({ exchangeRate: rate });
 });
