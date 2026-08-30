@@ -226,9 +226,6 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
 
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
 
   await ensureAutoIncrementColumn('users', 'id');
   await ensureAutoIncrementColumn('products', 'id');
@@ -246,6 +243,10 @@ export const initializeStore = async () => {
       is_available BOOLEAN NOT NULL DEFAULT TRUE
     );
   `);
+
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
