@@ -5,6 +5,7 @@ import { addAuditLog, createOrder, getOrderDetailById, getOrdersForUser, getUser
 import { authMiddleware } from '../middleware/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
 import { uploadDir } from '../utils/storage.js';
+import { uploadProof } from '../utils/cloudinary.js';
 
 export const ordersRouter = express.Router();
 
@@ -32,7 +33,19 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'Debes seleccionar un método de pago.' });
     }
 
-    const proofUrl = req.file ? `/uploads/${req.file.filename}` : payment_proof_url || null;
+    let proofUrl = payment_proof_url || null;
+    if (req.file) {
+      try {
+        const cloudinaryUrl = await uploadProof(req.file.path);
+        proofUrl = cloudinaryUrl || `/uploads/${req.file.filename}`;
+      } catch (error) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: 'No se pudo guardar el comprobante en el almacenamiento.' });
+      }
+      if (proofUrl.startsWith('https://res.cloudinary.com')) {
+        fs.unlink(req.file.path, () => {});
+      }
+    }
 
     const result = await createOrder({
       userId: req.user.id,
