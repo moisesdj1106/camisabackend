@@ -1,0 +1,38 @@
+[
+  {
+    "id": "1785692088384-80408",
+    "userId": 1,
+    "title": "Pedido aprobado",
+    "message": "Tu pedido #10 ya fue aprobado por el administrador.",
+    "type": "success",
+    "read": false,
+    "createdAt": "2026-08-02T17:34:48.384Z"
+  },
+  {
+    "id": "1785197492840-36262",
+    "userId": 3,
+    "title": "Pedido aprobado",
+    "message": "Tu pedido #9 ya fue aprobado por el administrador.",
+    "type": "success",
+    "read": false,
+    "createdAt": "2026-07-28T00:11:32.840Z"
+  },
+  {
+    "id": "1785096855756-77482",
+    "userId": 2,
+    "title": "Pedido aprobado",
+    "message": "Tu pedido #8 ya fue aprobado por el administrador.",
+    "type": "success",
+    "read": true,
+    "createdAt": "2026-07-26T20:14:15.756Z"
+  },
+  {
+    "id": "1785096172276-88124",
+    "userId": 1,
+    "title": "Pedido aprobado",
+    "message": "Tu pedido #7 ya fue aprobado por el administrador.",
+    "type": "success",
+    "read": true,
+    "createdAt": "2026-07-26T20:02:52.276Z"
+  }
+]
