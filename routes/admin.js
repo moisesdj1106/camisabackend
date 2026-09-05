@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, deleteClub, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, listClubs, setExchangeRate, updateClub, updateOrderStatus } from '../data/store.js';
+import { addAuditLog, createClub, createSalesClosure, deleteClub, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
 
@@ -14,6 +14,12 @@ export const adminRouter = express.Router();
 adminRouter.get('/dashboard', authMiddleware, adminOnly, async (req, res) => {
   const summary = await getDashboardStats();
   res.json(summary);
+});
+
+adminRouter.post('/metrics/reset', authMiddleware, adminOnly, async (req, res) => {
+  const resetAt = await resetRevenueMetrics();
+  await addAuditLog(req.user.id, 'RESET_REVENUE_METRICS', 'system_settings', null, { resetAt });
+  res.json({ resetAt });
 });
 
 adminRouter.get('/exchange-rate', async (req, res) => {

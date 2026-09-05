@@ -143,6 +143,21 @@ export const setExchangeRate = async (rate) => {
   return safeRate;
 };
 
+export const getMetricsResetAt = async () => {
+  const result = await pool.query("SELECT value FROM system_settings WHERE key = 'metrics_reset_at'");
+  return result.rows[0]?.value || null;
+};
+
+export const resetRevenueMetrics = async () => {
+  const resetAt = new Date().toISOString();
+  await pool.query(`
+    INSERT INTO system_settings (key, value, updated_at)
+    VALUES ('metrics_reset_at', $1, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+  `, [resetAt]);
+  return resetAt;
+};
+
 export const listClubs = async () => {
   const result = await pool.query('SELECT * FROM clubs ORDER BY id ASC');
   return result.rows.map((row) => ({ id: Number(row.id), name: row.name, country: row.country, logo_url: row.logo_url }));
@@ -670,30 +685,32 @@ export const createSalesClosure = async (periodType = 'day', referenceDate = new
 };
 
 export const getDashboardStats = async () => {
+  const metricsResetAt = await getMetricsResetAt();
+  const metricsParams = [metricsResetAt];
   const productsRes = await pool.query('SELECT COUNT(*)::int AS count FROM products');
   const stockRes = await pool.query('SELECT COALESCE(SUM(stock), 0)::int AS stock FROM products');
   const soldItemsRes = await pool.query(`
     SELECT COALESCE(SUM(oi.quantity), 0)::int AS count
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'approved'
-  `);
+    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
+  `, metricsParams);
   const revenueRes = await pool.query(`
     SELECT COALESCE(SUM(total_amount), 0)::numeric(12,2) AS usd
     FROM orders
-    WHERE status = 'approved'
-  `);
+    WHERE status = 'approved' AND ($1::timestamp IS NULL OR created_at >= $1::timestamp)
+  `, metricsParams);
   const lowStockRes = await pool.query('SELECT * FROM products WHERE stock = 0');
   const bestSellerRes = await pool.query(`
     SELECT p.title, SUM(oi.quantity) AS qty
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
     LEFT JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'approved'
+    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
     GROUP BY p.title
     ORDER BY qty DESC
     LIMIT 1
-  `);
+  `, metricsParams);
   const statusRes = await pool.query(`
     SELECT status, COUNT(*)::int AS count
     FROM orders
@@ -704,19 +721,20 @@ export const getDashboardStats = async () => {
     SELECT to_char(created_at, 'YYYY-MM') AS month, COALESCE(SUM(total_amount), 0)::numeric(12,2) AS usd
     FROM orders
     WHERE status = 'approved' AND created_at >= NOW() - INTERVAL '6 months'
+      AND ($1::timestamp IS NULL OR created_at >= $1::timestamp)
     GROUP BY 1
     ORDER BY 1
-  `);
+  `, metricsParams);
   const topProductsRes = await pool.query(`
     SELECT p.title, SUM(oi.quantity)::int AS qty, COALESCE(SUM(oi.quantity * oi.unit_price), 0)::numeric(12,2) AS revenue
     FROM order_items oi
     LEFT JOIN orders o ON o.id = oi.order_id
     LEFT JOIN products p ON p.id = oi.product_id
-    WHERE o.status = 'approved'
+    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
     GROUP BY p.title
     ORDER BY revenue DESC, qty DESC
     LIMIT 4
-  `);
+  `, metricsParams);
   const exchangeRate = await getExchangeRate();
 
   const trend = trendRes.rows.map((row) => ({
@@ -739,6 +757,7 @@ export const getDashboardStats = async () => {
     approvedOrders: Number(counts.approved || 0),
     rejectedOrders: Number(counts.rejected || 0),
     revenueTrend: trend,
+    metricsResetAt,
     topProducts: topProductsRes.rows.map((row) => ({
       name: row.title,
       qty: Number(row.qty),
