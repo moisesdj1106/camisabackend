@@ -120,8 +120,11 @@ const mapOrderItem = (row) => (row ? {
   product_id: row.product_id,
   product_title: row.product_title,
   size: row.size,
+  no_dorsal: row.no_dorsal,
   dorsal_number: row.dorsal_number,
   dorsal_name: row.dorsal_name,
+  custom_name: row.custom_name,
+  custom_number: row.custom_number,
   quantity: Number(row.quantity),
   unit_price: Number(row.unit_price)
 } : null);
@@ -285,13 +288,32 @@ export const initializeStore = async () => {
       id SERIAL PRIMARY KEY,
       order_id INTEGER REFERENCES orders(id),
       product_id INTEGER REFERENCES products(id),
+      size VARCHAR(10),
+      no_dorsal BOOLEAN NOT NULL DEFAULT FALSE,
       dorsal_number INTEGER,
       dorsal_name VARCHAR(150),
+      custom_name VARCHAR(150),
+      custom_number VARCHAR(20),
       quantity INTEGER NOT NULL,
       unit_price DECIMAL(10,2) NOT NULL
     );
   `);
   await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS size VARCHAR(10);`);
+  await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS no_dorsal BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_name VARCHAR(150);`);
+  await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS custom_number VARCHAR(20);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS order_shipping_details (
+      order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+      full_name VARCHAR(150) NOT NULL,
+      phone VARCHAR(50) NOT NULL,
+      cedula VARCHAR(30) NOT NULL,
+      agency VARCHAR(120) NOT NULL,
+      city VARCHAR(100) NOT NULL,
+      state VARCHAR(100) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -494,8 +516,14 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
   const order = mapOrder(orderRes.rows[0]);
   for (const item of items) {
     await pool.query(
-      'INSERT INTO order_items (order_id, product_id, size, dorsal_number, dorsal_name, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [order.id, item.product_id, item.size || null, item.dorsal_number || null, item.dorsal_name || null, item.quantity, item.unit_price]
+      'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+      [order.id, item.product_id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, item.quantity, item.unit_price]
+    );
+  }
+  if (deliveryMethod === 'national') {
+    await pool.query(
+      'INSERT INTO order_shipping_details (order_id, full_name, phone, cedula, agency, city, state) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [order.id, shippingDetails.name, shippingDetails.phone, shippingDetails.cedula, shippingDetails.agency, shippingDetails.city, shippingDetails.state]
     );
   }
   return { order, items };
@@ -512,6 +540,11 @@ export const getOrdersForUser = async (userId) => {
       WHERE oi.order_id = $1
       ORDER BY oi.id ASC
     `, [order.id]);
+    const shippingResult = await pool.query('SELECT full_name, phone, cedula, agency, city, state FROM order_shipping_details WHERE order_id = $1', [order.id]);
+    if (shippingResult.rows[0]) {
+      const shipping = shippingResult.rows[0];
+      order.shipping_details = { name: shipping.full_name, phone: shipping.phone, cedula: shipping.cedula, agency: shipping.agency, city: shipping.city, state: shipping.state };
+    }
     return {
       ...order,
       items: itemsResult.rows.map(mapOrderItem)
@@ -551,6 +584,11 @@ export const getOrderDetailById = async (orderId, userId = null, isAdmin = false
     LEFT JOIN products p ON p.id = oi.product_id
     WHERE oi.order_id = $1
   `, [orderId]);
+  const shippingResult = await pool.query('SELECT full_name, phone, cedula, agency, city, state FROM order_shipping_details WHERE order_id = $1', [orderId]);
+  if (shippingResult.rows[0]) {
+    const shipping = shippingResult.rows[0];
+    order.shipping_details = { name: shipping.full_name, phone: shipping.phone, cedula: shipping.cedula, agency: shipping.agency, city: shipping.city, state: shipping.state };
+  }
   const clientResult = await pool.query('SELECT * FROM users WHERE id = $1', [order.client_id]);
   return {
     order,

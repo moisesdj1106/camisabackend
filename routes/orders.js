@@ -29,7 +29,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'El carrito está vacío.' });
     }
 
-    if (items.some((item) => !item.size)) {
+    if (items.some((item) => !item.size || (item.no_dorsal !== true && !item.dorsal_number && !(item.custom_name && item.custom_number)))) {
       return res.status(400).json({ error: 'Cada producto debe tener una talla seleccionada.' });
     }
 
@@ -47,7 +47,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
         shipping_details = null;
       }
     }
-    if (delivery_method === 'national' && (!shipping_details?.name || !shipping_details?.phone || !shipping_details?.state || !shipping_details?.city || !shipping_details?.address)) {
+    if (delivery_method === 'national' && (!shipping_details?.name || !shipping_details?.phone || !shipping_details?.cedula || !shipping_details?.agency || !shipping_details?.city || !shipping_details?.state)) {
       return res.status(400).json({ error: 'Faltan datos para coordinar el envío nacional.' });
     }
 
