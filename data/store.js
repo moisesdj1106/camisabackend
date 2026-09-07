@@ -105,6 +105,8 @@ const mapOrder = (row) => (row ? {
   total_amount: Number(row.total_amount),
   payment_method: row.payment_method,
   payment_proof_url: row.payment_proof_url,
+  delivery_method: row.delivery_method || 'personal',
+  shipping_details: row.shipping_details || null,
   status: row.status,
   exchange_rate: row.exchange_rate ? Number(row.exchange_rate) : null,
   invoice_path: row.invoice_path || null,
@@ -117,6 +119,7 @@ const mapOrderItem = (row) => (row ? {
   order_id: row.order_id,
   product_id: row.product_id,
   product_title: row.product_title,
+  size: row.size,
   dorsal_number: row.dorsal_number,
   dorsal_name: row.dorsal_name,
   quantity: Number(row.quantity),
@@ -262,6 +265,8 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(20) DEFAULT 'personal';`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
@@ -286,6 +291,7 @@ export const initializeStore = async () => {
       unit_price DECIMAL(10,2) NOT NULL
     );
   `);
+  await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS size VARCHAR(10);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -478,18 +484,18 @@ export const deleteProduct = async (id) => {
   await pool.query('DELETE FROM products WHERE id = $1', [id]);
 };
 
-export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl }) => {
+export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails }) => {
   const totalAmount = items.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
   const exchangeRate = await getExchangeRate();
   const orderRes = await pool.query(
-    'INSERT INTO orders (client_id, total_amount, payment_method, payment_proof_url, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [userId, Number(totalAmount).toFixed(2), paymentMethod, paymentProofUrl || null, 'pending', Number(exchangeRate).toFixed(2)]
+    'INSERT INTO orders (client_id, total_amount, payment_method, payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
+    [userId, Number(totalAmount).toFixed(2), paymentMethod, paymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
   for (const item of items) {
     await pool.query(
-      'INSERT INTO order_items (order_id, product_id, dorsal_number, dorsal_name, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6)',
-      [order.id, item.product_id, item.dorsal_number || null, item.dorsal_name || null, item.quantity, item.unit_price]
+      'INSERT INTO order_items (order_id, product_id, size, dorsal_number, dorsal_name, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [order.id, item.product_id, item.size || null, item.dorsal_number || null, item.dorsal_name || null, item.quantity, item.unit_price]
     );
   }
   return { order, items };

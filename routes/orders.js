@@ -16,7 +16,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'No se pudo procesar la imagen del comprobante.' });
     }
 
-    let { items, payment_method, payment_proof_url } = req.body;
+    let { items, payment_method, payment_proof_url, delivery_method, shipping_details } = req.body;
     if (typeof items === 'string') {
       try {
         items = JSON.parse(items);
@@ -29,8 +29,26 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'El carrito está vacío.' });
     }
 
+    if (items.some((item) => !item.size)) {
+      return res.status(400).json({ error: 'Cada producto debe tener una talla seleccionada.' });
+    }
+
     if (!payment_method) {
       return res.status(400).json({ error: 'Debes seleccionar un método de pago.' });
+    }
+
+    if (!['personal', 'national'].includes(delivery_method)) {
+      return res.status(400).json({ error: 'Debes seleccionar una modalidad de entrega.' });
+    }
+    if (typeof shipping_details === 'string') {
+      try {
+        shipping_details = JSON.parse(shipping_details);
+      } catch (error) {
+        shipping_details = null;
+      }
+    }
+    if (delivery_method === 'national' && (!shipping_details?.name || !shipping_details?.phone || !shipping_details?.state || !shipping_details?.city || !shipping_details?.address)) {
+      return res.status(400).json({ error: 'Faltan datos para coordinar el envío nacional.' });
     }
 
     let proofUrl = payment_proof_url || null;
@@ -51,7 +69,9 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       userId: req.user.id,
       items,
       paymentMethod: payment_method,
-      paymentProofUrl: proofUrl
+      paymentProofUrl: proofUrl,
+      deliveryMethod: delivery_method,
+      shippingDetails: delivery_method === 'national' ? shipping_details : null
     });
 
     const invoiceItems = await Promise.all((items || []).map(async (item) => {
