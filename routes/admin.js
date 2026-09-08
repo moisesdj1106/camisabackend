@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, deleteClub, deleteOrder, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus } from '../data/store.js';
+import { addAuditLog, createClub, createSalesClosure, deleteClub, deleteOrder, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
 
@@ -61,6 +61,29 @@ adminRouter.delete('/orders/:id', authMiddleware, adminOnly, async (req, res) =>
   const deleted = await deleteOrder(Number(req.params.id), req.user.id);
   if (!deleted) return res.status(404).json({ error: 'Pedido no encontrado' });
   res.json({ success: true, id: Number(req.params.id) });
+});
+
+adminRouter.get('/users', authMiddleware, adminOnly, async (_req, res) => {
+  res.json(await getUsersAdmin());
+});
+
+adminRouter.put('/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const user = await updateUserAdmin(Number(req.params.id), req.body);
+    if (!user) return res.status(400).json({ error: 'Datos de usuario inválidos.' });
+    await addAuditLog(req.user.id, 'UPDATE_USER', 'users', user.id, { name: user.name, email: user.email, phone: user.phone, role: user.role });
+    res.json(user);
+  } catch (error) {
+    if (error.code === '23505') return res.status(400).json({ error: 'Ese correo ya está registrado.' });
+    res.status(500).json({ error: 'No se pudo actualizar el usuario.' });
+  }
+});
+
+adminRouter.delete('/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  const result = await deleteUserAdmin(Number(req.params.id), req.user.id);
+  if (result.error) return res.status(400).json(result);
+  await addAuditLog(req.user.id, 'DELETE_USER', 'users', Number(req.params.id), {});
+  res.json(result);
 });
 
 adminRouter.get('/audit-logs', authMiddleware, adminOnly, async (req, res) => {

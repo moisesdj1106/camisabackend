@@ -860,6 +860,52 @@ export const getUserById = async (id) => {
   return mapUser(result.rows[0]);
 };
 
+export const getUsersAdmin = async () => {
+  const result = await pool.query(`
+    SELECT u.id, u.name, u.email, u.phone, u.role, u.created_at,
+      COUNT(DISTINCT o.id)::int AS orders_count,
+      COALESCE(SUM(CASE WHEN o.status = 'approved' THEN o.total_amount ELSE 0 END), 0)::numeric AS approved_total
+    FROM users u
+    LEFT JOIN orders o ON o.client_id = u.id
+    GROUP BY u.id
+    ORDER BY u.id DESC
+  `);
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    role: row.role,
+    created_at: row.created_at,
+    orders_count: Number(row.orders_count || 0),
+    approved_total: Number(row.approved_total || 0)
+  }));
+};
+
+export const updateUserAdmin = async (id, payload) => {
+  const allowedRoles = new Set(['client', 'admin']);
+  const name = String(payload.name || '').trim();
+  const email = String(payload.email || '').trim();
+  const phone = String(payload.phone || '').trim();
+  const role = allowedRoles.has(payload.role) ? payload.role : 'client';
+  if (!name || !email) return null;
+  const result = await pool.query(
+    'UPDATE users SET name = $1, email = $2, phone = $3, role = $4 WHERE id = $5 RETURNING id, name, email, phone, role, created_at',
+    [name, email, phone || null, role, id]
+  );
+  return result.rows[0] || null;
+};
+
+export const deleteUserAdmin = async (id, currentUserId) => {
+  if (Number(id) === Number(currentUserId)) return { error: 'No puedes eliminar tu propia cuenta.' };
+  const userResult = await pool.query('SELECT id FROM users WHERE id = $1', [id]);
+  if (!userResult.rows[0]) return { error: 'Usuario no encontrado.' };
+  await pool.query('UPDATE orders SET client_id = NULL WHERE client_id = $1', [id]);
+  await pool.query('UPDATE audit_logs SET user_id = NULL WHERE user_id = $1', [id]);
+  await pool.query('DELETE FROM users WHERE id = $1', [id]);
+  return { success: true };
+};
+
 export const addAuditLog = async (userId, action, tableName, recordId, changes) => {
   try {
     await pool.query(
