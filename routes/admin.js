@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, deleteClub, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus } from '../data/store.js';
+import { addAuditLog, createClub, createSalesClosure, deleteClub, deleteOrder, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
 
@@ -55,6 +55,12 @@ adminRouter.put('/orders/:id/status', authMiddleware, adminOnly, async (req, res
   const order = await updateOrderStatus(Number(req.params.id), req.body.status, req.user.id);
   if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
   res.json(order);
+});
+
+adminRouter.delete('/orders/:id', authMiddleware, adminOnly, async (req, res) => {
+  const deleted = await deleteOrder(Number(req.params.id), req.user.id);
+  if (!deleted) return res.status(404).json({ error: 'Pedido no encontrado' });
+  res.json({ success: true, id: Number(req.params.id) });
 });
 
 adminRouter.get('/audit-logs', authMiddleware, adminOnly, async (req, res) => {

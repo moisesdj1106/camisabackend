@@ -567,6 +567,20 @@ export const getOrdersAdmin = async () => {
   return result.rows.map(mapOrder);
 };
 
+export const deleteOrder = async (orderId, userId) => {
+  const orderResult = await pool.query('SELECT id, status FROM orders WHERE id = $1', [orderId]);
+  if (!orderResult.rows[0]) return false;
+
+  await pool.query('DELETE FROM order_items WHERE order_id = $1', [orderId]);
+  await pool.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
+  await pool.query('DELETE FROM orders WHERE id = $1', [orderId]);
+  await pool.query(
+    'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
+    [userId, 'DELETE_ORDER', 'orders', orderId, JSON.stringify({ status: orderResult.rows[0].status })]
+  );
+  return true;
+};
+
 export const getOrderItemsByOrderId = async (orderId) => {
   const result = await pool.query(`
     SELECT oi.*, p.title AS product_title
