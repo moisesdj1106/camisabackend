@@ -1,5 +1,5 @@
 import express from 'express';
-import { addAuditLog, createUser, findUserByEmail } from '../data/store.js';
+import { addAuditLog, createUser, findUserByEmail, updateUserPasswordByContact } from '../data/store.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { hashPassword, comparePassword, signToken } from '../utils/auth.js';
 import { getNotificationsForUser, markNotificationAsRead, clearNotifications } from '../utils/notifications.js';
@@ -60,4 +60,22 @@ authRouter.post('/login', async (req, res) => {
 
   const token = signToken({ id: user.id, role: user.role });
   res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+});
+
+authRouter.post('/forgot-password', async (req, res) => {
+  const email = String(req.body.email || '').trim();
+  const phone = String(req.body.phone || '').trim();
+  const password = String(req.body.password || '');
+
+  if (!email || !phone || password.length < 6) {
+    return res.status(400).json({ error: 'Indica correo, teléfono y una contraseña de al menos 6 caracteres.' });
+  }
+
+  const user = await updateUserPasswordByContact(email, phone, await hashPassword(password));
+  if (!user) {
+    return res.status(400).json({ error: 'El correo y el teléfono no coinciden con una cuenta registrada.' });
+  }
+
+  await addAuditLog(user.id, 'RESET_PASSWORD', 'users', user.id, { email });
+  res.json({ message: 'Contraseña actualizada correctamente.' });
 });

@@ -386,6 +386,14 @@ export const findUserByEmail = async (email) => {
   return mapUser(result.rows[0]);
 };
 
+export const updateUserPasswordByContact = async (email, phone, password) => {
+  const result = await pool.query(
+    'UPDATE users SET password = $1 WHERE email = $2 AND phone = $3 RETURNING *',
+    [password, email, phone]
+  );
+  return mapUser(result.rows[0]);
+};
+
 export const createUser = async (payload) => {
   const result = await pool.query(
     'INSERT INTO users (name, email, phone, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
@@ -497,7 +505,8 @@ export const updateProduct = async (id, payload) => {
   values.push(id);
   const result = await pool.query(`UPDATE products SET ${fields.join(', ')} WHERE id = $${fields.length + 1} RETURNING *`, values);
   const product = mapProduct(result.rows[0]);
-  if (product) await syncProductDorsals(product.id, payload.dorsal_options || payload.dorsals || []);
+  const hasDorsalOptions = Object.prototype.hasOwnProperty.call(payload, 'dorsal_options') || Object.prototype.hasOwnProperty.call(payload, 'dorsals');
+  if (product && hasDorsalOptions) await syncProductDorsals(product.id, payload.dorsal_options ?? payload.dorsals);
   return product;
 };
 
