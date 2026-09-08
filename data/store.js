@@ -607,10 +607,13 @@ export const getOrderDetailById = async (orderId, userId = null, isAdmin = false
 };
 
 export const updateOrderStatus = async (orderId, status, userId) => {
+  const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
+  if (!allowedStatuses.has(status)) return null;
   const previousOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
   const previousStatus = previousOrder.rows[0]?.status;
+  if (!previousOrder.rows[0]) return null;
   await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, orderId]);
-  if (status === 'approved') {
+  if (status === 'approved' && previousStatus !== 'approved') {
     const itemsRes = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
     for (const item of itemsRes.rows) {
       await pool.query('UPDATE products SET stock = GREATEST(0, stock - $1) WHERE id = $2', [item.quantity, item.product_id]);
@@ -620,10 +623,10 @@ export const updateOrderStatus = async (orderId, status, userId) => {
   const result = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
   const updatedOrder = mapOrder(result.rows[0]);
 
-  if (status === 'approved' && previousStatus !== 'approved') {
+  if (status !== previousStatus) {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [updatedOrder.client_id]);
     const client = userRes.rows[0];
-    if (client?.email) {
+    if (status === 'approved' && client?.email) {
       await sendOrderApprovedEmail({
         to: client.email,
         userName: client.name,
@@ -633,9 +636,9 @@ export const updateOrderStatus = async (orderId, status, userId) => {
 
     createNotification({
       userId: updatedOrder.client_id,
-      title: 'Pedido aprobado',
-      message: `Tu pedido #${updatedOrder.id} ya fue aprobado por el administrador.`,
-      type: 'success'
+      title: status === 'approved' ? 'Pedido aprobado' : 'Actualización de pedido',
+      message: `Tu pedido #${updatedOrder.id} ahora está: ${status}.`,
+      type: status === 'rejected' || status === 'cancelled' ? 'warning' : 'success'
     });
   }
 
