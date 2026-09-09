@@ -2,8 +2,9 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, deleteClub, deleteOrder, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, createClub, createSalesClosure, createUser, deleteClub, deleteOrder, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
+import { hashPassword } from '../utils/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -65,6 +66,27 @@ adminRouter.delete('/orders/:id', authMiddleware, adminOnly, async (req, res) =>
 
 adminRouter.get('/users', authMiddleware, adminOnly, async (_req, res) => {
   res.json(await getUsersAdmin());
+});
+
+adminRouter.post('/users', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { name, email, phone, password, role } = req.body || {};
+    if (!String(name || '').trim() || !String(email || '').trim() || String(password || '').length < 6) {
+      return res.status(400).json({ error: 'Nombre, correo y una contraseña de al menos 6 caracteres son obligatorios.' });
+    }
+    const user = await createUser({
+      name: String(name).trim(),
+      email: String(email).trim(),
+      phone: String(phone || '').trim(),
+      password: await hashPassword(password),
+      role: role === 'admin' ? 'admin' : 'client'
+    });
+    await addAuditLog(req.user.id, 'CREATE_USER', 'users', user.id, { name: user.name, email: user.email, role: user.role });
+    res.status(201).json(await getUserById(user.id));
+  } catch (error) {
+    if (error.code === '23505') return res.status(400).json({ error: 'Ese correo ya está registrado.' });
+    res.status(500).json({ error: 'No se pudo crear el usuario.' });
+  }
 });
 
 adminRouter.put('/users/:id', authMiddleware, adminOnly, async (req, res) => {
