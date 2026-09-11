@@ -50,18 +50,32 @@ const parseImageUrls = (value) => {
   return [];
 };
 
+const parseStockBySize = (value) => {
+  if (!value) return {};
+  const parsed = typeof value === 'string' ? (() => {
+    try { return JSON.parse(value); } catch (error) { return {}; }
+  })() : value;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  return Object.fromEntries(['XS', 'S', 'M', 'L', 'XL', 'XXL']
+    .map((size) => [size, Math.max(0, Number(parsed[size]) || 0)])
+    .filter(([, quantity]) => quantity > 0));
+};
+
 const normalizeProductPayload = (payload = {}) => {
   const imageUrls = parseImageUrls(payload.image_urls ?? payload.images ?? []);
   const primaryImage = payload.image_url || imageUrls[0] || null;
   if (primaryImage && imageUrls.length === 0) imageUrls.push(primaryImage);
+  const stockBySize = parseStockBySize(payload.stock_by_size);
   return {
     ...payload,
     image_url: primaryImage,
-    image_urls: imageUrls
+    image_urls: imageUrls,
+    stock_by_size: stockBySize,
+    ...(Object.keys(stockBySize).length ? { stock: Object.values(stockBySize).reduce((sum, quantity) => sum + quantity, 0) } : {})
   };
 };
 
-const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'stock', 'type', 'is_active', 'image_url', 'image_urls']);
+const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'stock', 'stock_by_size', 'type', 'is_active', 'image_url', 'image_urls']);
 
 const getDefaultExchangeRate = () => {
   const configured = Number(process.env.DEFAULT_EXCHANGE_RATE || 36);
@@ -72,7 +86,7 @@ const getProductFieldEntries = (payload) => {
   const normalizedPayload = normalizeProductPayload(payload);
   return Object.entries(normalizedPayload).reduce((acc, [key, value]) => {
     if (value === undefined || key === 'id' || !PRODUCT_COLUMN_KEYS.has(key)) return acc;
-    acc.push([key, key === 'image_urls' ? JSON.stringify(value) : value]);
+    acc.push([key, key === 'image_urls' || key === 'stock_by_size' ? JSON.stringify(value) : value]);
     return acc;
   }, []);
 };
@@ -84,6 +98,7 @@ const mapProduct = (row) => (row ? {
   description: row.description,
   price: Number(row.price),
   stock: Number(row.stock),
+  stock_by_size: parseStockBySize(row.stock_by_size),
   type: row.type,
   is_active: row.is_active,
   created_at: row.created_at,
@@ -231,6 +246,7 @@ export const initializeStore = async () => {
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       image_url TEXT,
       image_urls JSONB DEFAULT '[]'::jsonb,
+      stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -245,6 +261,7 @@ export const initializeStore = async () => {
 
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb;`);
 
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
 
@@ -359,10 +376,10 @@ export const seedDemoData = async () => {
   `);
 
   await pool.query(`
-    INSERT INTO products (id, club_id, title, description, price, stock, type, is_active, image_url) VALUES
-      (1, 1, 'Camiseta Local Barça 2025', 'Modelo oficial de la temporada.', 89.99, 12, 'local', true, 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80'),
-      (2, 2, 'Camiseta Visitante Madrid', 'Diseño premium con tecnología transpirable.', 94.50, 0, 'visitante', true, 'https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=800&q=80'),
-      (3, 3, 'Tercera Boca Juniors', 'Edición limitada con detalles premium.', 72.00, 7, 'tercera', true, 'https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=800&q=80');
+    INSERT INTO products (id, club_id, title, description, price, stock, stock_by_size, type, is_active, image_url) VALUES
+      (1, 1, 'Camiseta Local Barça 2025', 'Modelo oficial de la temporada.', 89.99, 12, '{"S": 3, "M": 4, "L": 3, "XL": 2}', 'local', true, 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80'),
+      (2, 2, 'Camiseta Visitante Madrid', 'Diseño premium con tecnología transpirable.', 94.50, 0, '{}', 'visitante', true, 'https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=800&q=80'),
+      (3, 3, 'Tercera Boca Juniors', 'Edición limitada con detalles premium.', 72.00, 7, '{"M": 2, "L": 3, "XXL": 2}', 'tercera', true, 'https://images.unsplash.com/photo-1517649763962-0c623066013b?auto=format&fit=crop&w=800&q=80');
   `);
 
   await pool.query(`
@@ -482,8 +499,8 @@ export const createProduct = async (payload) => {
   const nextId = Number(idResult.rows[0].max_id) + 1;
 
   const result = await pool.query(
-    'INSERT INTO products (id, club_id, title, description, price, stock, type, is_active, image_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
-    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, normalizedPayload.stock, normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || [])]
+    'INSERT INTO products (id, club_id, title, description, price, stock, stock_by_size, type, is_active, image_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *',
+    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, normalizedPayload.stock, JSON.stringify(normalizedPayload.stock_by_size), normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || [])]
   );
   const product = mapProduct(result.rows[0]);
   await syncProductDorsals(product.id, payload.dorsal_options || payload.dorsals || []);
@@ -516,6 +533,14 @@ export const deleteProduct = async (id) => {
 };
 
 export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails }) => {
+  for (const item of items) {
+    const product = await getProductById(Number(item.product_id));
+    const stockBySize = product?.stock_by_size || {};
+    if (Object.keys(stockBySize).length && Number(item.quantity) > Number(stockBySize[item.size] || 0)) {
+      const available = Number(stockBySize[item.size] || 0);
+      throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
+    }
+  }
   const totalAmount = items.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
   const exchangeRate = await getExchangeRate();
   const orderRes = await pool.query(
@@ -630,7 +655,15 @@ export const updateOrderStatus = async (orderId, status, userId) => {
   if (status === 'approved' && previousStatus !== 'approved') {
     const itemsRes = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
     for (const item of itemsRes.rows) {
-      await pool.query('UPDATE products SET stock = GREATEST(0, stock - $1) WHERE id = $2', [item.quantity, item.product_id]);
+      await pool.query(`
+        UPDATE products
+        SET stock = GREATEST(0, stock - $1),
+            stock_by_size = CASE
+              WHEN stock_by_size ? $3 THEN jsonb_set(stock_by_size, ARRAY[$3], to_jsonb(GREATEST(0, COALESCE((stock_by_size ->> $3)::int, 0) - $1)), true)
+              ELSE stock_by_size
+            END
+        WHERE id = $2
+      `, [item.quantity, item.product_id, item.size]);
     }
   }
   await pool.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER', 'orders', orderId, JSON.stringify({ status })]);

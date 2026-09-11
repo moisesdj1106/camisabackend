@@ -65,14 +65,19 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       }
     }
 
-    const result = await createOrder({
-      userId: req.user.id,
-      items,
-      paymentMethod: payment_method,
-      paymentProofUrl: proofUrl,
-      deliveryMethod: delivery_method,
-      shippingDetails: delivery_method === 'national' ? shipping_details : null
-    });
+    let result;
+    try {
+      result = await createOrder({
+        userId: req.user.id,
+        items,
+        paymentMethod: payment_method,
+        paymentProofUrl: proofUrl,
+        deliveryMethod: delivery_method,
+        shippingDetails: delivery_method === 'national' ? shipping_details : null
+      });
+    } catch (error) {
+      return res.status(409).json({ error: error.message || 'El inventario cambió. Revisa las tallas y vuelve a intentarlo.' });
+    }
 
     const invoiceItems = await Promise.all((items || []).map(async (item) => {
       const product = await getProductById(Number(item.product_id));
