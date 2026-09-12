@@ -23,3 +23,18 @@ export const uploadProof = async (filePath) => {
   });
   return result.secure_url;
 };
+
+export const isCloudinaryConfigured = isConfigured;
+
+export const uploadStoreContent = async (filePath, originalName = '') => {
+  if (!isConfigured) return null;
+
+  const result = await cloudinary.uploader.upload(filePath, {
+    folder: 'camisetas/contenido',
+    resource_type: 'auto',
+    use_filename: true,
+    unique_filename: true,
+    filename_override: originalName || undefined
+  });
+  return result.secure_url;
+};

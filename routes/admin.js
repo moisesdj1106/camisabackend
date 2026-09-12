@@ -6,6 +6,7 @@ import { addAuditLog, createClub, createSalesClosure, createStoreContent, create
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
+import { uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,7 +17,22 @@ adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res, next) 
   req.app.locals.upload.single('file')(req, res, (error) => {
     if (error) return next(error);
     if (!req.file) return res.status(400).json({ error: 'Debes seleccionar un archivo.' });
-    res.status(201).json({ media_url: `/uploads/${req.file.filename}` });
+    uploadStoreContent(req.file.path, req.file.originalname)
+      .then((mediaUrl) => {
+        if (mediaUrl) {
+          fs.unlink(req.file.path, () => {});
+          return res.status(201).json({ media_url: mediaUrl, storage: 'cloudinary' });
+        }
+        if (process.env.NODE_ENV === 'production') {
+          fs.unlink(req.file.path, () => {});
+          return res.status(503).json({ error: 'Cloudinary no está configurado. Configura CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET en el backend.' });
+        }
+        res.status(201).json({ media_url: `/uploads/${req.file.filename}`, storage: 'local' });
+      })
+      .catch((uploadError) => {
+        console.error('Error subiendo contenido a Cloudinary:', uploadError.message);
+        res.status(502).json({ error: 'No se pudo guardar el archivo en la nube.' });
+      });
   });
 });
 
