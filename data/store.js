@@ -277,6 +277,7 @@ export const initializeStore = async () => {
     CREATE TABLE IF NOT EXISTS store_content (
       id SERIAL PRIMARY KEY,
       type VARCHAR(20) NOT NULL CHECK (type IN ('image', 'video', 'banner')),
+      slot VARCHAR(20) NOT NULL DEFAULT 'gallery',
       media_url TEXT NOT NULL,
       title VARCHAR(200),
       description TEXT,
@@ -286,6 +287,9 @@ export const initializeStore = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query(`ALTER TABLE store_content ADD COLUMN IF NOT EXISTS slot VARCHAR(20) NOT NULL DEFAULT 'gallery';`);
+  await pool.query(`UPDATE store_content SET slot = 'banner' WHERE type = 'banner' AND slot = 'gallery';`);
+  await pool.query(`UPDATE store_content SET slot = 'video' WHERE type = 'video' AND slot = 'gallery';`);
 
   await ensureAutoIncrementColumn('users', 'id');
   await ensureAutoIncrementColumn('products', 'id');
@@ -515,22 +519,27 @@ export const getProductLikeStatus = async (productId, userId) => {
 };
 
 export const listStoreContent = async (activeOnly = true) => {
-  const result = await pool.query(`SELECT * FROM store_content ${activeOnly ? 'WHERE is_active = TRUE' : ''} ORDER BY sort_order ASC, id DESC`);
-  return result.rows;
+  const result = await pool.query(`
+    SELECT *, CASE WHEN type = 'banner' AND slot = 'gallery' THEN 'banner' WHEN type = 'video' AND slot = 'gallery' THEN 'video' ELSE slot END AS content_slot
+    FROM store_content
+    ${activeOnly ? 'WHERE is_active = TRUE' : ''}
+    ORDER BY sort_order ASC, id DESC
+  `);
+  return result.rows.map(({ content_slot, ...row }) => ({ ...row, slot: content_slot }));
 };
 
 export const createStoreContent = async (payload) => {
   const result = await pool.query(
-    'INSERT INTO store_content (type, media_url, title, description, link_url, is_active, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-    [payload.type, payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0]
+    'INSERT INTO store_content (type, slot, media_url, title, description, link_url, is_active, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
+    [payload.type, payload.slot || 'gallery', payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0]
   );
   return result.rows[0];
 };
 
 export const updateStoreContent = async (id, payload) => {
   const result = await pool.query(
-    'UPDATE store_content SET type = $1, media_url = $2, title = $3, description = $4, link_url = $5, is_active = $6, sort_order = $7 WHERE id = $8 RETURNING *',
-    [payload.type, payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0, id]
+    'UPDATE store_content SET type = $1, slot = $2, media_url = $3, title = $4, description = $5, link_url = $6, is_active = $7, sort_order = $8 WHERE id = $9 RETURNING *',
+    [payload.type, payload.slot || 'gallery', payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0, id]
   );
   return result.rows[0] || null;
 };
