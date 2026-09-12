@@ -53,7 +53,14 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) return callback(null, true);
+    callback(new Error('Solo se permiten imágenes o videos.'));
+  }
+});
 app.locals.upload = upload;
 
 app.get('/api/health', (_req, res) => {
