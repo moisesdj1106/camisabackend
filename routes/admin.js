@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, createUser, deleteClub, deleteOrder, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
@@ -11,6 +11,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const adminRouter = express.Router();
+
+adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res, next) => {
+  req.app.locals.upload.single('file')(req, res, (error) => {
+    if (error) return next(error);
+    if (!req.file) return res.status(400).json({ error: 'Debes seleccionar un archivo.' });
+    res.status(201).json({ media_url: `/uploads/${req.file.filename}` });
+  });
+});
+
+adminRouter.get('/content', authMiddleware, adminOnly, async (_req, res) => {
+  res.json(await listStoreContent(false));
+});
+
+adminRouter.post('/content', authMiddleware, adminOnly, async (req, res) => {
+  res.status(201).json(await createStoreContent(req.body || {}));
+});
+
+adminRouter.put('/content/:id', authMiddleware, adminOnly, async (req, res) => {
+  const content = await updateStoreContent(Number(req.params.id), req.body || {});
+  if (!content) return res.status(404).json({ error: 'Contenido no encontrado' });
+  res.json(content);
+});
+
+adminRouter.delete('/content/:id', authMiddleware, adminOnly, async (req, res) => {
+  await deleteStoreContent(Number(req.params.id));
+  res.json({ success: true });
+});
 
 adminRouter.get('/dashboard', authMiddleware, adminOnly, async (req, res) => {
   const summary = await getDashboardStats();

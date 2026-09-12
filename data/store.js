@@ -265,6 +265,28 @@ export const initializeStore = async () => {
 
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_likes (
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (product_id, user_id)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS store_content (
+      id SERIAL PRIMARY KEY,
+      type VARCHAR(20) NOT NULL CHECK (type IN ('image', 'video', 'banner')),
+      media_url TEXT NOT NULL,
+      title VARCHAR(200),
+      description TEXT,
+      link_url TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   await ensureAutoIncrementColumn('users', 'id');
   await ensureAutoIncrementColumn('products', 'id');
   await ensureAutoIncrementColumn('product_dorsals', 'id');
@@ -421,7 +443,8 @@ export const createUser = async (payload) => {
 
 export const listProducts = async (filters = {}) => {
   let query = `
-    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url
+    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url,
+      (SELECT COUNT(*)::int FROM product_likes pl WHERE pl.product_id = p.id) AS likes_count
     FROM products p
     LEFT JOIN clubs c ON c.id = p.club_id
     WHERE 1 = 1
@@ -459,7 +482,8 @@ export const listProducts = async (filters = {}) => {
 
 export const getProductById = async (id) => {
   const productRes = await pool.query(`
-    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url
+    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url,
+      (SELECT COUNT(*)::int FROM product_likes pl WHERE pl.product_id = p.id) AS likes_count
     FROM products p
     LEFT JOIN clubs c ON c.id = p.club_id
     WHERE p.id = $1
@@ -472,6 +496,47 @@ export const getProductById = async (id) => {
     club: product.club_name ? { id: product.club_id_ref, name: product.club_name, country: product.club_country, logo_url: product.club_logo_url } : null,
     dorsals: dorsalsRes.rows.map(mapDorsal)
   };
+};
+
+export const toggleProductLike = async (productId, userId) => {
+  const existing = await pool.query('SELECT 1 FROM product_likes WHERE product_id = $1 AND user_id = $2', [productId, userId]);
+  if (existing.rows.length) {
+    await pool.query('DELETE FROM product_likes WHERE product_id = $1 AND user_id = $2', [productId, userId]);
+  } else {
+    await pool.query('INSERT INTO product_likes (product_id, user_id) VALUES ($1, $2)', [productId, userId]);
+  }
+  const result = await pool.query('SELECT COUNT(*)::int AS likes_count FROM product_likes WHERE product_id = $1', [productId]);
+  return { liked: !existing.rows.length, likes_count: result.rows[0].likes_count };
+};
+
+export const getProductLikeStatus = async (productId, userId) => {
+  const result = await pool.query('SELECT 1 FROM product_likes WHERE product_id = $1 AND user_id = $2', [productId, userId]);
+  return result.rows.length > 0;
+};
+
+export const listStoreContent = async (activeOnly = true) => {
+  const result = await pool.query(`SELECT * FROM store_content ${activeOnly ? 'WHERE is_active = TRUE' : ''} ORDER BY sort_order ASC, id DESC`);
+  return result.rows;
+};
+
+export const createStoreContent = async (payload) => {
+  const result = await pool.query(
+    'INSERT INTO store_content (type, media_url, title, description, link_url, is_active, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+    [payload.type, payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0]
+  );
+  return result.rows[0];
+};
+
+export const updateStoreContent = async (id, payload) => {
+  const result = await pool.query(
+    'UPDATE store_content SET type = $1, media_url = $2, title = $3, description = $4, link_url = $5, is_active = $6, sort_order = $7 WHERE id = $8 RETURNING *',
+    [payload.type, payload.media_url, payload.title || '', payload.description || '', payload.link_url || null, payload.is_active !== false, Number(payload.sort_order) || 0, id]
+  );
+  return result.rows[0] || null;
+};
+
+export const deleteStoreContent = async (id) => {
+  await pool.query('DELETE FROM store_content WHERE id = $1', [id]);
 };
 
 const parseDorsalOptions = (value) => {

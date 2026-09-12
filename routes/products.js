@@ -1,5 +1,5 @@
 import express from 'express';
-import { createProduct, deleteProduct, getProductById, listProducts, updateProduct } from '../data/store.js';
+import { createProduct, deleteProduct, getProductById, getProductLikeStatus, listProducts, toggleProductLike, updateProduct } from '../data/store.js';
 import { authMiddleware, adminOnly, audit } from '../middleware/auth.js';
 
 export const productsRouter = express.Router();
@@ -14,6 +14,18 @@ productsRouter.get('/:id', async (req, res) => {
   const product = await getProductById(Number(req.params.id));
   if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
   res.json(product);
+});
+
+productsRouter.get('/:id/like', authMiddleware, async (req, res) => {
+  const product = await getProductById(Number(req.params.id));
+  if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
+  res.json({ liked: await getProductLikeStatus(Number(req.params.id), req.user.id), likes_count: product.likes_count });
+});
+
+productsRouter.post('/:id/like', authMiddleware, async (req, res) => {
+  const product = await getProductById(Number(req.params.id));
+  if (!product) return res.status(404).json({ error: 'Producto no encontrado' });
+  res.json(await toggleProductLike(Number(req.params.id), req.user.id));
 });
 
 productsRouter.post('/', authMiddleware, adminOnly, audit('CREATE_PRODUCT', 'products'), async (req, res) => {
