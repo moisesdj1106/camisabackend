@@ -6,7 +6,7 @@ import { addAuditLog, createClub, createSalesClosure, createStoreContent, create
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createInvoicePdf } from '../utils/pdf.js';
-import { uploadStoreContent } from '../utils/cloudinary.js';
+import { uploadProductImage, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +33,32 @@ adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res) => {
         console.error('Error subiendo contenido a Cloudinary:', uploadError.message);
         res.status(502).json({ error: 'No se pudo guardar el archivo en la nube.' });
       });
+  });
+});
+
+adminRouter.post('/products/upload-images', authMiddleware, adminOnly, (req, res) => {
+  req.app.locals.upload.array('files', 10)(req, res, async (error) => {
+    if (error) return res.status(400).json({ error: error.message || 'No se pudieron procesar las imágenes.' });
+    if (!req.files?.length) return res.status(400).json({ error: 'Debes seleccionar al menos una imagen.' });
+
+    try {
+      const urls = [];
+      for (const file of req.files) {
+        const url = await uploadProductImage(file.path, file.originalname);
+        if (!url) {
+          if (process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Cloudinary no está configurado en el backend.' });
+          urls.push(`/uploads/${file.filename}`);
+        } else {
+          urls.push(url);
+          fs.unlink(file.path, () => {});
+        }
+      }
+      res.status(201).json({ image_urls: urls });
+    } catch (uploadError) {
+      req.files.forEach((file) => fs.unlink(file.path, () => {}));
+      console.error('Error subiendo imágenes del producto:', uploadError.message);
+      res.status(502).json({ error: 'No se pudieron guardar las imágenes en la nube.' });
+    }
   });
 });
 
