@@ -13,9 +13,9 @@ const __dirname = path.dirname(__filename);
 
 export const adminRouter = express.Router();
 
-adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res, next) => {
+adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res) => {
   req.app.locals.upload.single('file')(req, res, (error) => {
-    if (error) return next(error);
+    if (error) return res.status(400).json({ error: error.message || 'No se pudo procesar el archivo.' });
     if (!req.file) return res.status(400).json({ error: 'Debes seleccionar un archivo.' });
     uploadStoreContent(req.file.path, req.file.originalname)
       .then((mediaUrl) => {
