@@ -59,7 +59,7 @@ const drawWhatsappIcon = (doc, x, y, size = 15) => {
     .lineTo(x + size * 0.12, y + size * 0.98)
     .lineTo(x + size * 0.38, y + size * 0.86)
     .stroke('#16a34a');
-  doc.fontSize(size * 0.52).fillColor('#16a34a').text('W', x + size * 0.32, y + size * 0.25, { width: size * 0.4, align: 'center' });
+  doc.fontSize(size * 0.36).fillColor('#16a34a').text('W', x + size * 0.34, y + size * 0.34, { width: size * 0.32, align: 'center', lineBreak: false });
   doc.restore();
 };
 
@@ -157,7 +157,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const footerY = doc.page.height - 120;
   doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', 40, footerY - 36, { width: 515, align: 'center' });
-  doc.text('www.mdjsoccer.com', 40, footerY - 20, { width: 515, align: 'center' });
+  doc.text('www.mdjsport.netlify.app.com', 40, footerY - 20, { width: 515, align: 'center' });
   const currentPage = doc.bufferedPageRange().count - 1;
   doc.switchToPage(currentPage);
   drawInvoiceFooter(doc, logoImage);
