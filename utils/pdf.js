@@ -73,7 +73,7 @@ const drawInvoiceFooter = (doc, logoPath) => {
 
   drawInstagramIcon(doc, 325, footerY + 11);
   doc.fontSize(8.5).fillColor('#2563eb').text('@mdj_soccer', 344, footerY + 14);
-  drawWhatsappIcon(doc, 425, footerY + 10);
+  drawWhatsappIcon(doc, 421, footerY + 10);
   doc.fontSize(8.5).fillColor('#16a34a').text('+58 0414-714-6602', 445, footerY + 14);
 };
 
