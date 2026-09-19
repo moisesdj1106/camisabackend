@@ -71,7 +71,7 @@ const drawInvoiceFooter = (doc, logoPath) => {
 
   drawInstagramIcon(doc, 325, footerY + 11);
   doc.fontSize(8.5).fillColor('#2563eb').text('@mdj_soccer', 344, footerY + 14);
-  drawWhatsappIcon(doc, 421, footerY + 10);
+  drawWhatsappIcon(doc, 415, footerY + 10);
   doc.fontSize(8.5).fillColor('#16a34a').text('+58 0414-714-6602', 445, footerY + 14);
 };
 
@@ -89,8 +89,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
   doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
   if (logoImage) {
-    doc.rect(402, 48, 108, 76).fill('#ffffff').stroke('#dbe5f1');
-    doc.image(logoImage, 412, 51, { fit: [88, 70], align: 'center', valign: 'center' });
+    doc.image(logoImage, 420, 51, { fit: [88, 70], align: 'center', valign: 'center' });
   }
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
