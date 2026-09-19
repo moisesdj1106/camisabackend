@@ -7,9 +7,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const findLogoPath = () => {
   const candidates = [
+    path.join(process.cwd(), 'frontend', 'public', 'loguito.png'),
     path.join(__dirname, '../../frontend/public/loguito.png'),
     path.join(__dirname, '../public/loguito.png'),
-    path.join(process.cwd(), 'frontend/public/loguito.png')
+    path.join(__dirname, '../../../frontend/public/loguito.png')
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 };
@@ -62,7 +63,7 @@ const drawWhatsappIcon = (doc, x, y, size = 15) => {
 };
 
 const drawInvoiceFooter = (doc) => {
-  const footerY = 775;
+  const footerY = doc.page.height - 120;
   doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
   doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 40, footerY + 12);
   doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-714-6602', 40, footerY + 27);
@@ -75,7 +76,7 @@ const drawInvoiceFooter = (doc) => {
 
 export const createInvoicePdf = async (order, items, client, options = {}) => {
   const exchangeRate = Number(options.exchangeRate || 36);
-  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bottomMargin: 90 });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
 
@@ -86,7 +87,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const logoPath = findLogoPath();
   doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
   if (logoPath) {
-    doc.image(logoPath, 438, 50, { fit: [68, 72], align: 'center', valign: 'center' });
+    doc.image(logoPath, 438, 50, { width: 68, height: 72 });
   }
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
@@ -138,7 +139,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     if (item.dorsal_name || item.custom_name || item.no_dorsal) {
       const customization = item.no_dorsal
         ? 'Sin dorsal'
-        : item.custom_name ? `Personalizada: ${item.custom_name} #${item.custom_number || ''}` : `Dorsal: ${item.dorsal_number} - ${item.dorsal_name}`;
+        : item.custom_name ? `Personalizada: ${item.custom_name} Dorsal # ${item.custom_number || ''}` : `Dorsal: ${item.dorsal_number} - ${item.dorsal_name}`;
       drawCell(doc, 80, currentY, 440, 20, customization, { fontSize: 8, color: '#475569' });
       currentY += 20;
     }
@@ -154,6 +155,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.moveDown(2.2);
   doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', { align: 'center' });
   doc.text('www.mdjsoccer.com', { align: 'center' });
+  const currentPage = doc.bufferedPageRange().count - 1;
+  doc.switchToPage(currentPage);
   drawInvoiceFooter(doc);
 
   doc.end();
