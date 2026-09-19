@@ -42,6 +42,37 @@ const drawCell = (doc, x, y, width, height, text, options = {}) => {
   });
 };
 
+const drawInstagramIcon = (doc, x, y, size = 14) => {
+  doc.save();
+  doc.lineWidth(1.4).roundedRect(x, y, size, size, 3).stroke('#2563eb');
+  doc.circle(x + size / 2, y + size / 2, size * 0.25).stroke('#2563eb');
+  doc.circle(x + size * 0.74, y + size * 0.26, 1).fill('#2563eb');
+  doc.restore();
+};
+
+const drawWhatsappIcon = (doc, x, y, size = 15) => {
+  doc.save();
+  doc.lineWidth(1.3).circle(x + size / 2, y + size / 2, size * 0.43).stroke('#16a34a');
+  doc.moveTo(x + size * 0.2, y + size * 0.82)
+    .lineTo(x + size * 0.12, y + size * 0.98)
+    .lineTo(x + size * 0.38, y + size * 0.86)
+    .stroke('#16a34a');
+  doc.fontSize(size * 0.52).fillColor('#16a34a').text('W', x + size * 0.32, y + size * 0.25, { width: size * 0.4, align: 'center' });
+  doc.restore();
+};
+
+const drawInvoiceFooter = (doc) => {
+  const footerY = 775;
+  doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
+  doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 40, footerY + 12);
+  doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-714-6602', 40, footerY + 27);
+
+  drawInstagramIcon(doc, 325, footerY + 11);
+  doc.fontSize(8.5).fillColor('#2563eb').text('@mdj_soccer', 344, footerY + 14);
+  drawWhatsappIcon(doc, 425, footerY + 10);
+  doc.fontSize(8.5).fillColor('#16a34a').text('+58 0414-714-6602', 445, footerY + 14);
+};
+
 export const createInvoicePdf = async (order, items, client, options = {}) => {
   const exchangeRate = Number(options.exchangeRate || 36);
   const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -55,12 +86,12 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const logoPath = findLogoPath();
   doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
   if (logoPath) {
-    doc.image(logoPath, 56, 55, { fit: [62, 62], align: 'center', valign: 'center' });
+    doc.image(logoPath, 438, 50, { fit: [68, 72], align: 'center', valign: 'center' });
   }
-  doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', logoPath ? 132 : 60, 58);
-  doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas premium', logoPath ? 132 : 60, 88);
-  doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 370, 62, { width: 130, align: 'right' });
-  doc.fontSize(10).fillColor('#cfe4ff').text(`Pedido #${order.id}`, 370, 82, { width: 130, align: 'right' });
+  doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
+  doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
+  doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 270, 62, { width: 145, align: 'right' });
+  doc.fontSize(10).fillColor('#cfe4ff').text(`Pedido #${order.id}`, 270, 82, { width: 145, align: 'right' });
   doc.y = 150;
 
   const headerY = doc.y;
@@ -71,7 +102,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.fillColor('#ffffff').fontSize(10).text('DATOS DE LA EMPRESA', 288, headerY + 8);
 
   drawCell(doc, 40, headerY + 30, 240, 42, `${client?.name || 'Cliente'}\n${client?.email || ''}`, { fontSize: 10 });
-  drawCell(doc, 280, headerY + 30, 240, 42, 'MDJ SOCCER\ncontacto@mdjsoccer.com\n+58 0414-714-6602', { fontSize: 10 });
+  drawCell(doc, 280, headerY + 30, 240, 42, 'MDJ SOCCER\nmdjsoccer@gmail.com\n+58 0414-714-6602', { fontSize: 10 });
 
   drawCell(doc, 40, headerY + 72, 240, 30, `Método de pago: ${paymentMethodLabels[order.payment_method] || order.payment_method || 'No indicado'}`, { fontSize: 9 });
   drawCell(doc, 280, headerY + 72, 240, 30, `Tasa de cambio: ${exchangeRate.toFixed(2)} BS/USD`, { fontSize: 9 });
@@ -123,6 +154,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.moveDown(2.2);
   doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', { align: 'center' });
   doc.text('www.mdjsoccer.com', { align: 'center' });
+  drawInvoiceFooter(doc);
 
   doc.end();
 
