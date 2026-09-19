@@ -7,9 +7,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const findLogoPath = () => {
   const candidates = [
+    path.join(process.cwd(), 'frontend', 'public', 'logosinfondo.png'),
     path.join(process.cwd(), 'frontend', 'public', 'loguito.png'),
+    path.join(__dirname, '../../frontend/public/logosinfondo.png'),
     path.join(__dirname, '../../frontend/public/loguito.png'),
+    path.join(__dirname, '../public/logosinfondo.png'),
     path.join(__dirname, '../public/loguito.png'),
+    path.join(__dirname, '../../../frontend/public/logosinfondo.png'),
     path.join(__dirname, '../../../frontend/public/loguito.png')
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
