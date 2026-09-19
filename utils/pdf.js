@@ -7,14 +7,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const findLogoPath = () => {
   const candidates = [
-    path.join(process.cwd(), 'frontend', 'public', 'logosinfondo.png'),
-    path.join(process.cwd(), 'frontend', 'public', 'loguito.png'),
     path.join(__dirname, '../../frontend/public/logosinfondo.png'),
     path.join(__dirname, '../../frontend/public/loguito.png'),
-    path.join(__dirname, '../public/logosinfondo.png'),
-    path.join(__dirname, '../public/loguito.png'),
-    path.join(__dirname, '../../../frontend/public/logosinfondo.png'),
-    path.join(__dirname, '../../../frontend/public/loguito.png')
+    path.join(process.cwd(), '../frontend/public/logosinfondo.png'),
+    path.join(process.cwd(), '../frontend/public/loguito.png')
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 };
@@ -91,7 +87,10 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const logoPath = findLogoPath();
   doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
   if (logoPath) {
-    doc.image(logoPath, 438, 50, { width: 68, height: 72 });
+    doc.save();
+    doc.roundedRect(402, 48, 108, 76, 8).fill('#ffffff');
+    doc.image(logoPath, 412, 51, { fit: [88, 70], align: 'center', valign: 'center' });
+    doc.restore();
   }
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
