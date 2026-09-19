@@ -87,14 +87,14 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
-  doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
+  doc.roundedRect(40, 40, 360, 92, 12).fill('#0f2d52');
   if (logoImage) {
     doc.image(logoImage, 420, 51, { fit: [88, 70], align: 'center', valign: 'center' });
   }
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
-  doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 270, 62, { width: 145, align: 'right' });
-  doc.fontSize(10).fillColor('#cfe4ff').text(`Pedido #${order.id}`, 270, 82, { width: 145, align: 'right' });
+  doc.fontSize(10).fillColor('#1e3a8a').text(`FACTURA Nº ${invoiceNumber}`, 270, 62, { width: 120, align: 'right' });
+  doc.fontSize(10).fillColor('#64748b').text(`Pedido #${order.id}`, 270, 82, { width: 120, align: 'right' });
   doc.y = 150;
 
   const headerY = doc.y;
@@ -154,9 +154,9 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.fillColor('#1e3a8a').fontSize(10).text('TOTAL BS', 330, totalsY + 30);
   doc.fillColor('#0f2d52').fontSize(11).text(`${totalBs.toFixed(2)}`, 440, totalsY + 29, { width: 70, align: 'right' });
 
-  doc.moveDown(2.2);
-  doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', { align: 'center' });
-  doc.text('www.mdjsoccer.com', { align: 'center' });
+  const footerY = doc.page.height - 120;
+  doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', 40, footerY - 36, { width: 515, align: 'center' });
+  doc.text('www.mdjsoccer.com', 40, footerY - 20, { width: 515, align: 'center' });
   const currentPage = doc.bufferedPageRange().count - 1;
   doc.switchToPage(currentPage);
   drawInvoiceFooter(doc, null);
