@@ -62,11 +62,14 @@ const drawWhatsappIcon = (doc, x, y, size = 15) => {
   doc.restore();
 };
 
-const drawInvoiceFooter = (doc) => {
+const drawInvoiceFooter = (doc, logoPath) => {
   const footerY = doc.page.height - 120;
   doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
-  doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 40, footerY + 12);
-  doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-714-6602', 40, footerY + 27);
+  if (logoPath) {
+    doc.image(logoPath, 40, footerY + 7, { fit: [62, 52], align: 'center', valign: 'center' });
+  }
+  doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 115, footerY + 12);
+  doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-714-6602', 115, footerY + 27);
 
   drawInstagramIcon(doc, 325, footerY + 11);
   doc.fontSize(8.5).fillColor('#2563eb').text('@mdj_soccer', 344, footerY + 14);
@@ -86,12 +89,6 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const logoPath = findLogoPath();
   doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
-  if (logoPath) {
-    doc.save();
-    doc.roundedRect(402, 48, 108, 76, 8).fill('#ffffff');
-    doc.image(logoPath, 412, 51, { fit: [88, 70], align: 'center', valign: 'center' });
-    doc.restore();
-  }
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
   doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 270, 62, { width: 145, align: 'right' });
@@ -160,7 +157,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.text('www.mdjsoccer.com', { align: 'center' });
   const currentPage = doc.bufferedPageRange().count - 1;
   doc.switchToPage(currentPage);
-  drawInvoiceFooter(doc);
+  drawInvoiceFooter(doc, logoPath);
 
   doc.end();
 
