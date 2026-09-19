@@ -66,6 +66,10 @@ const drawWhatsappIcon = (doc, x, y, size = 15) => {
 const drawInvoiceFooter = (doc, logoPath) => {
   const footerY = doc.page.height - 120;
   doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
+  if (logoPath) {
+    doc.rect(40, footerY + 4, 76, 60).fill('#ffffff');
+    doc.image(logoPath, 44, footerY + 7, { fit: [68, 54], align: 'center', valign: 'center' });
+  }
   doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 115, footerY + 12);
   doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-714-6602', 115, footerY + 27);
 
@@ -87,14 +91,11 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
-  doc.roundedRect(40, 40, 360, 92, 12).fill('#0f2d52');
-  if (logoImage) {
-    doc.image(logoImage, 420, 51, { fit: [88, 70], align: 'center', valign: 'center' });
-  }
+  doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
   doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
   doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
-  doc.fontSize(10).fillColor('#1e3a8a').text(`FACTURA Nº ${invoiceNumber}`, 270, 62, { width: 120, align: 'right' });
-  doc.fontSize(10).fillColor('#64748b').text(`Pedido #${order.id}`, 270, 82, { width: 120, align: 'right' });
+  doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 370, 62, { width: 130, align: 'right' });
+  doc.fontSize(10).fillColor('#cfe4ff').text(`Pedido #${order.id}`, 370, 82, { width: 130, align: 'right' });
   doc.y = 150;
 
   const headerY = doc.y;
@@ -159,7 +160,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.text('www.mdjsoccer.com', 40, footerY - 20, { width: 515, align: 'center' });
   const currentPage = doc.bufferedPageRange().count - 1;
   doc.switchToPage(currentPage);
-  drawInvoiceFooter(doc, null);
+  drawInvoiceFooter(doc, logoImage);
 
   doc.end();
 
