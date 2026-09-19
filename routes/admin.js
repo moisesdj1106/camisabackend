@@ -133,6 +133,18 @@ adminRouter.delete('/orders/:id', authMiddleware, adminOnly, async (req, res) =>
   res.json({ success: true, id: Number(req.params.id) });
 });
 
+adminRouter.post('/orders/bulk-delete', authMiddleware, adminOnly, async (req, res) => {
+  const orderIds = [...new Set((Array.isArray(req.body?.orderIds) ? req.body.orderIds : [])
+    .map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!orderIds.length) return res.status(400).json({ error: 'Selecciona al menos un pedido.' });
+
+  const deletedIds = [];
+  for (const orderId of orderIds) {
+    if (await deleteOrder(orderId, req.user.id)) deletedIds.push(orderId);
+  }
+  res.json({ success: true, ids: deletedIds });
+});
+
 adminRouter.get('/users', authMiddleware, adminOnly, async (_req, res) => {
   res.json(await getUsersAdmin());
 });

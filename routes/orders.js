@@ -33,12 +33,15 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'Cada producto debe tener una talla seleccionada.' });
     }
 
-    if (!payment_method) {
+    if (!['whatsapp', 'pago_movil', 'efectivo'].includes(payment_method)) {
       return res.status(400).json({ error: 'Debes seleccionar un método de pago.' });
     }
 
     if (!['personal', 'national'].includes(delivery_method)) {
       return res.status(400).json({ error: 'Debes seleccionar una modalidad de entrega.' });
+    }
+    if (payment_method === 'efectivo' && delivery_method !== 'personal') {
+      return res.status(400).json({ error: 'El pago en efectivo solo está disponible para la entrega personal.' });
     }
     if (typeof shipping_details === 'string') {
       try {

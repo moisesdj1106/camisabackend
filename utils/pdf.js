@@ -14,6 +14,24 @@ const findLogoPath = () => {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 };
 
+const paymentMethodLabels = {
+  whatsapp: 'WhatsApp',
+  pago_movil: 'Pago Móvil',
+  efectivo: 'Efectivo'
+};
+
+const orderStatusLabels = {
+  pending: 'Pendiente',
+  approved: 'Aprobado',
+  requires_info: 'Requiere información',
+  preparing: 'En preparación',
+  ready_pickup: 'Listo para retirar',
+  shipped: 'Enviado',
+  delivered: 'Entregado',
+  rejected: 'Rechazado',
+  cancelled: 'Cancelado'
+};
+
 const drawCell = (doc, x, y, width, height, text, options = {}) => {
   doc.rect(x, y, width, height).stroke();
   doc.fontSize(options.fontSize || 10);
@@ -55,10 +73,10 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   drawCell(doc, 40, headerY + 30, 240, 42, `${client?.name || 'Cliente'}\n${client?.email || ''}`, { fontSize: 10 });
   drawCell(doc, 280, headerY + 30, 240, 42, 'MDJ SOCCER\ncontacto@mdjsoccer.com\n+58 0414-714-6602', { fontSize: 10 });
 
-  drawCell(doc, 40, headerY + 72, 240, 30, `Método de pago: ${order.payment_method}`, { fontSize: 9 });
+  drawCell(doc, 40, headerY + 72, 240, 30, `Método de pago: ${paymentMethodLabels[order.payment_method] || order.payment_method || 'No indicado'}`, { fontSize: 9 });
   drawCell(doc, 280, headerY + 72, 240, 30, `Tasa de cambio: ${exchangeRate.toFixed(2)} BS/USD`, { fontSize: 9 });
   doc.roundedRect(40, headerY + 102, 480, 26, 5).fill('#e8f1ff');
-  doc.fillColor('#1e3a8a').fontSize(10).text(`Estado del pedido: ${order.status}`, 48, headerY + 110);
+  doc.fillColor('#1e3a8a').fontSize(10).text(`Estado del pedido: ${orderStatusLabels[order.status] || order.status || 'No indicado'}`, 48, headerY + 110);
 
   doc.moveDown(2.2);
   doc.fontSize(13).fillColor('#0f2d52').text('Detalle de compra');
