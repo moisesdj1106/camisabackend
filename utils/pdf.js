@@ -242,7 +242,7 @@ export const createApprovedOrdersPdf = async (orders) => {
     drawLabelValue('Equipo', item.club_name || 'Sin equipo', contentX + 282, cardY + 14, 215);
     drawLabelValue('Talla', item.size || 'N/D', contentX + 22, cardY + 52, 115);
     drawLabelValue('Dorsal', dorsal, contentX + 150, cardY + 52, 150);
-    drawLabelValue('Cantidad', `${item.quantity || 1} unidad(es)`, contentX + 318, cardY + 52, 179);
+    drawLabelValue('Cantidad', `${item.quantity || 1} unidad (es)`, contentX + 318, cardY + 52, 179);
     drawLabelValue('Personalizada', personalization, contentX + 22, cardY + 78, contentWidth - 44);
     doc.y = cardY + cardHeight + 8;
   };
