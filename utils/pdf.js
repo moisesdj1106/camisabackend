@@ -198,11 +198,11 @@ export const createApprovedOrdersPdf = async (orders) => {
 
   const drawPageHeader = () => {
     doc.y = 36;
-    doc.roundedRect(contentX, doc.y, contentWidth, 78, 12).fill('#0f2d52');
-    doc.fillColor('#ffffff').fontSize(19).text('PEDIDOS ACEPTADOS', contentX + 22, doc.y + 19);
-    doc.fillColor('#cfe4ff').fontSize(9).text('Control de camisetas para preparación', contentX + 22, doc.y + 47);
-    doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 22, doc.y + 61);
-    doc.y += 82;
+    doc.roundedRect(contentX, doc.y, contentWidth, 52, 10).fill('#0f2d52');
+    doc.fillColor('#ffffff').fontSize(17).text('PEDIDOS ACEPTADOS', contentX + 18, doc.y + 11);
+    doc.fillColor('#cfe4ff').fontSize(8).text('Control de camisetas para preparación', contentX + 18, doc.y + 32);
+    doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 285, doc.y + 32, { width: 220, align: 'right' });
+    doc.y += 58;
   };
 
   const ensureSpace = (height) => {
