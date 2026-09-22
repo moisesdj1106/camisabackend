@@ -197,12 +197,13 @@ export const createApprovedOrdersPdf = async (orders) => {
   };
 
   const drawPageHeader = () => {
-    doc.y = 36;
-    doc.roundedRect(contentX, doc.y, contentWidth, 52, 10).fill('#0f2d52');
-    doc.fillColor('#ffffff').fontSize(17).text('PEDIDOS ACEPTADOS', contentX + 18, doc.y + 11);
-    doc.fillColor('#cfe4ff').fontSize(8).text('Control de camisetas para preparación', contentX + 18, doc.y + 32);
-    doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 285, doc.y + 32, { width: 220, align: 'right' });
-    doc.y += 58;
+    const headerY = 36;
+    doc.y = headerY;
+    doc.roundedRect(contentX, headerY, contentWidth, 52, 10).fill('#0f2d52');
+    doc.fillColor('#ffffff').fontSize(17).text('PEDIDOS ACEPTADOS', contentX + 18, headerY + 11);
+    doc.fillColor('#cfe4ff').fontSize(8).text('Control de camisetas para preparación', contentX + 18, headerY + 32);
+    doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 285, headerY + 32, { width: 220, align: 'right' });
+    doc.y = headerY + 52;
   };
 
   const ensureSpace = (height) => {
