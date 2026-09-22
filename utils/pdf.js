@@ -168,3 +168,84 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
   });
 };
+
+const approvedOrderHeader = (doc) => {
+  const columns = [
+    ['Usuario', 110], ['Pedido', 42], ['Camiseta', 132], ['Talla', 42],
+    ['Equipo', 82], ['Dorsal', 58], ['Personalización', 92], ['Cant.', 32]
+  ];
+  let x = 28;
+  const headerY = doc.y;
+  doc.rect(28, headerY, 500, 25).fill('#0f2d52');
+  columns.forEach(([label, width]) => {
+    doc.fillColor('#ffffff').fontSize(8).text(label, x + 4, headerY + 8, { width: width - 8, align: label === 'Cant.' ? 'center' : 'left' });
+    x += width;
+  });
+  doc.y = headerY + 25;
+  return columns;
+};
+
+export const createApprovedOrdersPdf = async (orders) => {
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 28, bufferPages: true });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+  const columns = [110, 42, 132, 42, 82, 58, 92, 32];
+  const rows = orders.flatMap((order) => (order.items || []).map((item) => ({ order, item })));
+
+  const drawPageTitle = () => {
+    doc.y = 28;
+    doc.fillColor('#0f2d52').fontSize(20).text('MDJ SOCCER · PEDIDOS ACEPTADOS');
+    doc.fillColor('#64748b').fontSize(9).text(`Generado el ${new Date().toLocaleString('es-VE')} · ${orders.length} pedido(s) · ${rows.length} camiseta(s)`);
+    doc.moveDown(1);
+    approvedOrderHeader(doc);
+  };
+
+  const drawFooter = () => {
+    const pageRange = doc.bufferedPageRange();
+    doc.fontSize(8).fillColor('#64748b').text(`MDJ SOCCER · Pedidos aceptados · Página ${pageRange.count}`, 28, 565, { width: 500, align: 'right' });
+  };
+
+  drawPageTitle();
+  rows.forEach(({ order, item }, index) => {
+    const rowHeight = 29;
+    if (doc.y + rowHeight > 550) {
+      drawFooter();
+      doc.addPage();
+      drawPageTitle();
+    }
+    const rowY = doc.y;
+    const rowColor = index % 2 === 0 ? '#f8fbff' : '#eef5ff';
+    doc.rect(28, rowY, 500, rowHeight).fill(rowColor).stroke('#dbe5f1');
+    const personalization = item.custom_name
+      ? `Personalizada: ${item.custom_name}${item.custom_number ? ` #${item.custom_number}` : ''}`
+      : 'No';
+    const dorsal = item.no_dorsal
+      ? 'Sin dorsal'
+      : item.custom_name
+        ? `#${item.custom_number || 'N/D'}`
+        : item.dorsal_number
+          ? `#${item.dorsal_number}${item.dorsal_name ? ` ${item.dorsal_name}` : ''}`
+          : 'N/D';
+    const values = [
+      order.client?.name || 'Cliente', `#${order.id}`, item.product_title || `Producto #${item.product_id}`,
+      item.size || 'N/D', item.club_name || 'Sin equipo', dorsal, personalization, String(item.quantity || 1)
+    ];
+    let x = 28;
+    values.forEach((value, valueIndex) => {
+      doc.fillColor('#1e293b').fontSize(7.5).text(String(value), x + 4, rowY + 9, {
+        width: columns[valueIndex] - 8,
+        height: rowHeight - 8,
+        ellipsis: true,
+        align: valueIndex === 7 ? 'center' : 'left'
+      });
+      x += columns[valueIndex];
+    });
+    doc.y = rowY + rowHeight;
+  });
+
+  drawFooter();
+  doc.end();
+  return await new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+};

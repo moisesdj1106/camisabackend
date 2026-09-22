@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { addAuditLog, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
-import { createInvoicePdf } from '../utils/pdf.js';
+import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
 import { uploadProductImage, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -197,6 +197,19 @@ adminRouter.get('/audit-logs', authMiddleware, adminOnly, async (req, res) => {
 adminRouter.get('/clubs', authMiddleware, adminOnly, async (req, res) => {
   const clubs = await listClubs();
   res.json(clubs);
+});
+
+adminRouter.get('/orders/approved/pdf', authMiddleware, adminOnly, async (req, res) => {
+  const approvedOrders = (await getOrdersAdmin()).filter((order) => order.status === 'approved');
+  const orders = await Promise.all(approvedOrders.map(async (order) => {
+    const { getOrderDetailById } = await import('../data/store.js');
+    const detail = await getOrderDetailById(order.id, null, true);
+    return detail;
+  }));
+  const pdfBuffer = await createApprovedOrdersPdf(orders.filter(Boolean));
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="pedidos-aceptados.pdf"');
+  res.send(pdfBuffer);
 });
 
 adminRouter.get('/orders/:id/invoice', authMiddleware, adminOnly, async (req, res) => {

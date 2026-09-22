@@ -134,6 +134,7 @@ const mapOrderItem = (row) => (row ? {
   order_id: row.order_id,
   product_id: row.product_id,
   product_title: row.product_title,
+  club_name: row.club_name,
   size: row.size,
   no_dorsal: row.no_dorsal,
   dorsal_number: row.dorsal_number,
@@ -682,9 +683,10 @@ export const deleteOrder = async (orderId, userId) => {
 
 export const getOrderItemsByOrderId = async (orderId) => {
   const result = await pool.query(`
-    SELECT oi.*, p.title AS product_title
+    SELECT oi.*, p.title AS product_title, c.name AS club_name
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
+    LEFT JOIN clubs c ON c.id = p.club_id
     WHERE oi.order_id = $1
     ORDER BY oi.id ASC
   `, [orderId]);
@@ -701,9 +703,10 @@ export const getOrderDetailById = async (orderId, userId = null, isAdmin = false
   const order = mapOrder(orderResult.rows[0]);
   if (!isAdmin && userId !== null && order.client_id !== userId) return null;
   const itemsResult = await pool.query(`
-    SELECT oi.*, p.title AS product_title
+    SELECT oi.*, p.title AS product_title, c.name AS club_name
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
+    LEFT JOIN clubs c ON c.id = p.club_id
     WHERE oi.order_id = $1
   `, [orderId]);
   const shippingResult = await pool.query('SELECT full_name, phone, cedula, agency, city, state FROM order_shipping_details WHERE order_id = $1', [orderId]);
