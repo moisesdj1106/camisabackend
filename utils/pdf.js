@@ -175,12 +175,16 @@ export const createApprovedOrdersPdf = async (orders) => {
   doc.on('data', (chunk) => chunks.push(chunk));
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
+  const normalizedOrders = orders.map((entry) => {
+    const order = entry.order || entry;
+    return { ...order, items: entry.items || order.items || [], client: entry.client || order.client };
+  });
   const contentX = 36;
   const contentWidth = 523;
   const footerY = 755;
   let pageNumber = 1;
 
-  const totalItems = orders.reduce((total, order) => total + (order.items || []).length, 0);
+  const totalItems = normalizedOrders.reduce((total, order) => total + (order.items || []).length, 0);
 
   const drawPageFooter = () => {
     doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
@@ -195,14 +199,10 @@ export const createApprovedOrdersPdf = async (orders) => {
   const drawPageHeader = () => {
     doc.y = 36;
     doc.roundedRect(contentX, doc.y, contentWidth, 78, 12).fill('#0f2d52');
-    if (logoImage) {
-      doc.rect(contentX + 14, doc.y + 10, 74, 58).fill('#ffffff');
-      doc.image(logoImage, contentX + 20, doc.y + 14, { fit: [62, 50], align: 'center', valign: 'center' });
-    }
-    doc.fillColor('#ffffff').fontSize(19).text('PEDIDOS ACEPTADOS', contentX + 105, doc.y + 19);
-    doc.fillColor('#cfe4ff').fontSize(9).text('Control de camisetas para preparación', contentX + 105, doc.y + 47);
-    doc.fillColor('#dbeafe').fontSize(8).text(`${orders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 105, doc.y + 61);
-    doc.y += 94;
+    doc.fillColor('#ffffff').fontSize(19).text('PEDIDOS ACEPTADOS', contentX + 22, doc.y + 19);
+    doc.fillColor('#cfe4ff').fontSize(9).text('Control de camisetas para preparación', contentX + 22, doc.y + 47);
+    doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 22, doc.y + 61);
+    doc.y += 82;
   };
 
   const ensureSpace = (height) => {
@@ -220,7 +220,7 @@ export const createApprovedOrdersPdf = async (orders) => {
 
   const drawItem = (item, index) => {
     const personalization = item.custom_name
-      ? `Sí · ${item.custom_name}${item.custom_number ? ` #${item.custom_number}` : ''}`
+      ? `Sí · ${item.custom_name}`
       : 'No';
     const dorsal = item.no_dorsal
       ? 'Sin dorsal'
@@ -247,7 +247,7 @@ export const createApprovedOrdersPdf = async (orders) => {
   };
 
   drawPageHeader();
-  orders.forEach((order) => {
+  normalizedOrders.forEach((order) => {
     const orderHeaderHeight = 58;
     ensureSpace(orderHeaderHeight + 8);
     const orderY = doc.y;
@@ -255,13 +255,15 @@ export const createApprovedOrdersPdf = async (orders) => {
     doc.fillColor('#1e3a8a').fontSize(12).text(order.client?.name || 'Cliente', contentX + 16, orderY + 12);
     doc.fillColor('#64748b').fontSize(8.5).text(order.client?.email || 'Sin correo registrado', contentX + 16, orderY + 32);
     doc.fillColor('#0f2d52').fontSize(11).text(`PEDIDO #${order.id}`, contentX + 385, orderY + 15, { width: 122, align: 'right' });
-    doc.fillColor('#64748b').fontSize(8).text(new Date(order.created_at).toLocaleDateString('es-VE'), contentX + 385, orderY + 34, { width: 122, align: 'right' });
+    const orderDate = order.created_at ? new Date(order.created_at) : null;
+    const formattedDate = orderDate && !Number.isNaN(orderDate.getTime()) ? orderDate.toLocaleDateString('es-VE') : 'Fecha no disponible';
+    doc.fillColor('#64748b').fontSize(8).text(formattedDate, contentX + 385, orderY + 34, { width: 122, align: 'right' });
     doc.y = orderY + orderHeaderHeight + 8;
     (order.items || []).forEach(drawItem);
     doc.moveDown(0.25);
   });
 
-  if (!orders.length) {
+  if (!normalizedOrders.length) {
     ensureSpace(70);
     doc.roundedRect(contentX, doc.y, contentWidth, 70, 8).fill('#f8fbff').strokeColor('#dbe5f1').stroke();
     doc.fillColor('#475569').fontSize(11).text('No hay pedidos aceptados para imprimir.', contentX + 20, doc.y + 27, { width: contentWidth - 40, align: 'center' });
