@@ -169,81 +169,106 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   });
 };
 
-const approvedOrderHeader = (doc) => {
-  const columns = [
-    ['Usuario', 110], ['Pedido', 42], ['Camiseta', 132], ['Talla', 42],
-    ['Equipo', 82], ['Dorsal', 58], ['Personalización', 92], ['Cant.', 32]
-  ];
-  let x = 28;
-  const headerY = doc.y;
-  doc.rect(28, headerY, 500, 25).fill('#0f2d52');
-  columns.forEach(([label, width]) => {
-    doc.fillColor('#ffffff').fontSize(8).text(label, x + 4, headerY + 8, { width: width - 8, align: label === 'Cant.' ? 'center' : 'left' });
-    x += width;
-  });
-  doc.y = headerY + 25;
-  return columns;
-};
-
 export const createApprovedOrdersPdf = async (orders) => {
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 28, bufferPages: true });
+  const doc = new PDFDocument({ size: 'A4', margin: 36, bottomMargin: 70, bufferPages: true });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
-  const columns = [110, 42, 132, 42, 82, 58, 92, 32];
-  const rows = orders.flatMap((order) => (order.items || []).map((item) => ({ order, item })));
+  const logoPath = findLogoPath();
+  const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
+  const contentX = 36;
+  const contentWidth = 523;
+  const footerY = 755;
+  let pageNumber = 1;
 
-  const drawPageTitle = () => {
-    doc.y = 28;
-    doc.fillColor('#0f2d52').fontSize(20).text('MDJ SOCCER · PEDIDOS ACEPTADOS');
-    doc.fillColor('#64748b').fontSize(9).text(`Generado el ${new Date().toLocaleString('es-VE')} · ${orders.length} pedido(s) · ${rows.length} camiseta(s)`);
-    doc.moveDown(1);
-    approvedOrderHeader(doc);
-  };
+  const totalItems = orders.reduce((total, order) => total + (order.items || []).length, 0);
 
-  const drawFooter = () => {
-    const pageRange = doc.bufferedPageRange();
-    doc.fontSize(8).fillColor('#64748b').text(`MDJ SOCCER · Pedidos aceptados · Página ${pageRange.count}`, 28, 565, { width: 500, align: 'right' });
-  };
-
-  drawPageTitle();
-  rows.forEach(({ order, item }, index) => {
-    const rowHeight = 29;
-    if (doc.y + rowHeight > 550) {
-      drawFooter();
-      doc.addPage();
-      drawPageTitle();
+  const drawPageFooter = () => {
+    doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
+    if (logoImage) {
+      doc.image(logoImage, contentX, footerY - 2, { fit: [52, 36], align: 'center', valign: 'center' });
     }
-    const rowY = doc.y;
-    const rowColor = index % 2 === 0 ? '#f8fbff' : '#eef5ff';
-    doc.rect(28, rowY, 500, rowHeight).fill(rowColor).stroke('#dbe5f1');
+    doc.fontSize(8).fillColor('#64748b').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', contentX + 62, footerY + 5);
+    doc.text('Teléfono: +58 0414-714-6602  ·  @mdj_soccer', contentX + 62, footerY + 19);
+    doc.text(`Pedidos aceptados · Página ${pageNumber}`, contentX, footerY + 19, { width: contentWidth, align: 'right' });
+  };
+
+  const drawPageHeader = () => {
+    doc.y = 36;
+    doc.roundedRect(contentX, doc.y, contentWidth, 78, 12).fill('#0f2d52');
+    if (logoImage) {
+      doc.rect(contentX + 14, doc.y + 10, 74, 58).fill('#ffffff');
+      doc.image(logoImage, contentX + 20, doc.y + 14, { fit: [62, 50], align: 'center', valign: 'center' });
+    }
+    doc.fillColor('#ffffff').fontSize(19).text('PEDIDOS ACEPTADOS', contentX + 105, doc.y + 19);
+    doc.fillColor('#cfe4ff').fontSize(9).text('Control de camisetas para preparación', contentX + 105, doc.y + 47);
+    doc.fillColor('#dbeafe').fontSize(8).text(`${orders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 105, doc.y + 61);
+    doc.y += 94;
+  };
+
+  const ensureSpace = (height) => {
+    if (doc.y + height <= footerY - 18) return;
+    drawPageFooter();
+    doc.addPage();
+    pageNumber += 1;
+    drawPageHeader();
+  };
+
+  const drawLabelValue = (label, value, x, y, width) => {
+    doc.fillColor('#64748b').fontSize(7.5).text(label.toUpperCase(), x, y, { width });
+    doc.fillColor('#172033').fontSize(10).text(String(value || 'N/D'), x, y + 11, { width });
+  };
+
+  const drawItem = (item, index) => {
     const personalization = item.custom_name
-      ? `Personalizada: ${item.custom_name}${item.custom_number ? ` #${item.custom_number}` : ''}`
+      ? `Sí · ${item.custom_name}${item.custom_number ? ` #${item.custom_number}` : ''}`
       : 'No';
     const dorsal = item.no_dorsal
       ? 'Sin dorsal'
       : item.custom_name
         ? `#${item.custom_number || 'N/D'}`
         : item.dorsal_number
-          ? `#${item.dorsal_number}${item.dorsal_name ? ` ${item.dorsal_name}` : ''}`
+          ? `#${item.dorsal_number}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`
           : 'N/D';
-    const values = [
-      order.client?.name || 'Cliente', `#${order.id}`, item.product_title || `Producto #${item.product_id}`,
-      item.size || 'N/D', item.club_name || 'Sin equipo', dorsal, personalization, String(item.quantity || 1)
-    ];
-    let x = 28;
-    values.forEach((value, valueIndex) => {
-      doc.fillColor('#1e293b').fontSize(7.5).text(String(value), x + 4, rowY + 9, {
-        width: columns[valueIndex] - 8,
-        height: rowHeight - 8,
-        ellipsis: true,
-        align: valueIndex === 7 ? 'center' : 'left'
-      });
-      x += columns[valueIndex];
-    });
-    doc.y = rowY + rowHeight;
+    const title = item.product_title || `Producto #${item.product_id}`;
+    const personalizationHeight = doc.heightOfString(personalization, { width: contentWidth - 44, fontSize: 10 });
+    const cardHeight = Math.max(118, doc.heightOfString(title, { width: 245, fontSize: 11 }) + personalizationHeight + 78);
+    ensureSpace(cardHeight);
+    const cardY = doc.y;
+    const background = index % 2 === 0 ? '#f8fbff' : '#f1f6fc';
+    doc.roundedRect(contentX, cardY, contentWidth, cardHeight, 8).fill(background).strokeColor('#dbe5f1').stroke();
+    doc.roundedRect(contentX, cardY, 7, cardHeight, 3).fill('#2563eb');
+    drawLabelValue('Camiseta', title, contentX + 22, cardY + 14, 245);
+    drawLabelValue('Equipo', item.club_name || 'Sin equipo', contentX + 282, cardY + 14, 215);
+    drawLabelValue('Talla', item.size || 'N/D', contentX + 22, cardY + 52, 115);
+    drawLabelValue('Dorsal', dorsal, contentX + 150, cardY + 52, 150);
+    drawLabelValue('Cantidad', `${item.quantity || 1} unidad(es)`, contentX + 318, cardY + 52, 179);
+    drawLabelValue('Personalizada', personalization, contentX + 22, cardY + 78, contentWidth - 44);
+    doc.y = cardY + cardHeight + 8;
+  };
+
+  drawPageHeader();
+  orders.forEach((order) => {
+    const orderHeaderHeight = 58;
+    ensureSpace(orderHeaderHeight + 8);
+    const orderY = doc.y;
+    doc.roundedRect(contentX, orderY, contentWidth, orderHeaderHeight, 8).fill('#e8f1ff');
+    doc.fillColor('#1e3a8a').fontSize(12).text(order.client?.name || 'Cliente', contentX + 16, orderY + 12);
+    doc.fillColor('#64748b').fontSize(8.5).text(order.client?.email || 'Sin correo registrado', contentX + 16, orderY + 32);
+    doc.fillColor('#0f2d52').fontSize(11).text(`PEDIDO #${order.id}`, contentX + 385, orderY + 15, { width: 122, align: 'right' });
+    doc.fillColor('#64748b').fontSize(8).text(new Date(order.created_at).toLocaleDateString('es-VE'), contentX + 385, orderY + 34, { width: 122, align: 'right' });
+    doc.y = orderY + orderHeaderHeight + 8;
+    (order.items || []).forEach(drawItem);
+    doc.moveDown(0.25);
   });
 
-  drawFooter();
+  if (!orders.length) {
+    ensureSpace(70);
+    doc.roundedRect(contentX, doc.y, contentWidth, 70, 8).fill('#f8fbff').strokeColor('#dbe5f1').stroke();
+    doc.fillColor('#475569').fontSize(11).text('No hay pedidos aceptados para imprimir.', contentX + 20, doc.y + 27, { width: contentWidth - 40, align: 'center' });
+    doc.y += 78;
+  }
+
+  drawPageFooter();
   doc.end();
   return await new Promise((resolve) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
