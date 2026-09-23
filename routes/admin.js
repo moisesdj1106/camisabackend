@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -125,6 +125,15 @@ adminRouter.put('/orders/:id/status', authMiddleware, adminOnly, async (req, res
   const order = await updateOrderStatus(Number(req.params.id), req.body.status, req.user.id);
   if (!order) return res.status(404).json({ error: 'Pedido no encontrado' });
   res.json(order);
+});
+
+adminRouter.post('/orders/:id/items', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const order = await addItemToOrder(Number(req.params.id), req.body || {}, req.user.id);
+    res.status(201).json(order);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudo agregar el producto al pedido.' });
+  }
 });
 
 adminRouter.delete('/orders/:id', authMiddleware, adminOnly, async (req, res) => {

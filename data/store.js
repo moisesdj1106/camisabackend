@@ -638,6 +638,62 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
   return { order, items };
 };
 
+export const addItemToOrder = async (orderId, item, userId) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) throw new Error('Pedido no encontrado.');
+    if (['cancelled', 'rejected', 'delivered'].includes(order.status)) {
+      throw new Error('No se puede modificar un pedido cerrado.');
+    }
+
+    const productResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [Number(item.product_id)]);
+    const product = productResult.rows[0];
+    if (!product || !product.is_active) throw new Error('El producto seleccionado no está disponible.');
+
+    const quantity = Math.max(1, Number(item.quantity) || 1);
+    const stockBySize = typeof product.stock_by_size === 'string' ? JSON.parse(product.stock_by_size || '{}') : (product.stock_by_size || {});
+    const available = Object.keys(stockBySize).length ? Number(stockBySize[item.size] || 0) : Number(product.stock || 0);
+    if (!item.size || available < quantity) {
+      throw new Error(`No hay suficiente stock para la talla ${item.size || 'seleccionada'}. Disponibles: ${available}.`);
+    }
+
+    await client.query(
+      'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+      [orderId, product.id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, quantity, product.price]
+    );
+
+    if (order.status === 'approved') {
+      await client.query(`
+        UPDATE products
+        SET stock = GREATEST(0, stock - $1),
+            stock_by_size = CASE
+              WHEN stock_by_size ? $3 THEN jsonb_set(stock_by_size, ARRAY[$3], to_jsonb(GREATEST(0, COALESCE((stock_by_size ->> $3)::int, 0) - $1)), true)
+              ELSE stock_by_size
+            END
+        WHERE id = $2
+      `, [quantity, product.id, item.size]);
+    }
+
+    const nextTotal = Number(order.total_amount) + (Number(product.price) * quantity);
+    const updatedOrder = await client.query('UPDATE orders SET total_amount = $1 WHERE id = $2 RETURNING *', [nextTotal.toFixed(2), orderId]);
+    await client.query(
+      'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
+      [userId, 'ADD_ORDER_ITEM', 'orders', orderId, JSON.stringify({ product_id: product.id, quantity, size: item.size, total_amount: nextTotal })]
+    );
+    await client.query('COMMIT');
+    return mapOrder(updatedOrder.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 export const getOrdersForUser = async (userId) => {
   const result = await pool.query('SELECT * FROM orders WHERE client_id = $1 ORDER BY id DESC', [userId]);
   const orders = await Promise.all(result.rows.map(async (row) => {
