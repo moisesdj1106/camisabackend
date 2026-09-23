@@ -736,6 +736,55 @@ export const updateOrderDiscount = async (orderId, discountPercent, userId) => {
   return mapOrder(updated.rows[0]);
 };
 
+export const updateOrderAdmin = async (orderId, payload, userId) => {
+  const allowedPaymentMethods = new Set(['whatsapp', 'pago_movil', 'efectivo']);
+  const allowedDeliveryMethods = new Set(['personal', 'national']);
+  if (!allowedPaymentMethods.has(payload.payment_method) || !allowedDeliveryMethods.has(payload.delivery_method)) {
+    throw new Error('Método de pago o entrega inválido.');
+  }
+  if (payload.payment_method === 'efectivo' && payload.delivery_method !== 'personal') {
+    throw new Error('El pago en efectivo solo está disponible para entrega personal.');
+  }
+  if (payload.delivery_method === 'national' && (!payload.shipping_details?.name || !payload.shipping_details?.phone || !payload.shipping_details?.cedula || !payload.shipping_details?.agency || !payload.shipping_details?.city || !payload.shipping_details?.state)) {
+    throw new Error('Completa todos los datos del envío nacional.');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    if (!existing.rows[0]) throw new Error('Pedido no encontrado.');
+    const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
+    if (!allowedStatuses.has(payload.status)) throw new Error('Estado de pedido inválido.');
+
+    const updated = await client.query(`
+      UPDATE orders
+      SET payment_method = $1, payment_proof_url = $2, delivery_method = $3, shipping_details = $4, status = $5
+      WHERE id = $6
+      RETURNING *
+    `, [payload.payment_method, payload.payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId]);
+
+    if (payload.delivery_method === 'national') {
+      await client.query(`
+        INSERT INTO order_shipping_details (order_id, full_name, phone, cedula, agency, city, state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (order_id) DO UPDATE SET full_name = EXCLUDED.full_name, phone = EXCLUDED.phone, cedula = EXCLUDED.cedula, agency = EXCLUDED.agency, city = EXCLUDED.city, state = EXCLUDED.state
+      `, [orderId, payload.shipping_details.name, payload.shipping_details.phone, payload.shipping_details.cedula, payload.shipping_details.agency, payload.shipping_details.city, payload.shipping_details.state]);
+    } else {
+      await client.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
+    }
+
+    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DETAILS', 'orders', orderId, JSON.stringify({ payment_method: payload.payment_method, delivery_method: payload.delivery_method, status: payload.status })]);
+    await client.query('COMMIT');
+    return mapOrder(updated.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 export const getOrdersForUser = async (userId) => {
   const result = await pool.query('SELECT * FROM orders WHERE client_id = $1 ORDER BY id DESC', [userId]);
   const orders = await Promise.all(result.rows.map(async (row) => {

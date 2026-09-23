@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderDiscount, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -143,6 +143,15 @@ adminRouter.put('/orders/:id/discount', authMiddleware, adminOnly, async (req, r
   const order = await updateOrderDiscount(Number(req.params.id), discount, req.user.id);
   if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
   res.json(order);
+});
+
+adminRouter.put('/orders/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const order = await updateOrderAdmin(Number(req.params.id), req.body || {}, req.user.id);
+    res.json(order);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
+  }
 });
 
 adminRouter.post('/orders/:id/items', authMiddleware, adminOnly, async (req, res) => {

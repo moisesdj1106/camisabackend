@@ -231,8 +231,8 @@ export const createApprovedOrdersPdf = async (orders) => {
           ? `#${item.dorsal_number}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`
           : 'N/D';
     const title = item.product_title || `Producto #${item.product_id}`;
-    const personalizationHeight = doc.heightOfString(personalization, { width: contentWidth - 44, fontSize: 10 });
-    const cardHeight = Math.max(118, doc.heightOfString(title, { width: 245, fontSize: 11 }) + personalizationHeight + 78);
+    const personalizationHeight = doc.heightOfString(personalization, { width: 118, fontSize: 9 });
+    const cardHeight = Math.max(96, doc.heightOfString(title, { width: 245, fontSize: 11 }) + personalizationHeight + 58);
     ensureSpace(cardHeight);
     const cardY = doc.y;
     const background = index % 2 === 0 ? '#f8fbff' : '#f1f6fc';
@@ -240,10 +240,10 @@ export const createApprovedOrdersPdf = async (orders) => {
     doc.roundedRect(contentX, cardY, 7, cardHeight, 3).fill('#2563eb');
     drawLabelValue('Camiseta', title, contentX + 22, cardY + 14, 245);
     drawLabelValue('Equipo', item.club_name || 'Sin equipo', contentX + 282, cardY + 14, 215);
-    drawLabelValue('Talla', item.size || 'N/D', contentX + 22, cardY + 52, 115);
-    drawLabelValue('Dorsal', dorsal, contentX + 150, cardY + 52, 150);
-    drawLabelValue('Cantidad', `${item.quantity || 1} unidad (es)`, contentX + 318, cardY + 52, 179);
-    drawLabelValue('Personalizada', personalization, contentX + 22, cardY + 78, contentWidth - 44);
+    drawLabelValue('Talla', item.size || 'N/D', contentX + 22, cardY + 52, 72);
+    drawLabelValue('Dorsal', dorsal, contentX + 105, cardY + 52, 130);
+    drawLabelValue('Cantidad', `${item.quantity || 1} unidad (es)`, contentX + 248, cardY + 52, 112);
+    drawLabelValue('Personalizada', personalization, contentX + 372, cardY + 52, 125);
     doc.y = cardY + cardHeight + 8;
   };
 
