@@ -120,6 +120,8 @@ const mapOrder = (row) => (row ? {
   id: row.id,
   client_id: row.client_id,
   total_amount: Number(row.total_amount),
+  subtotal_amount: Number(row.subtotal_amount ?? row.total_amount),
+  discount_percent: Number(row.discount_percent || 0),
   payment_method: row.payment_method,
   payment_proof_url: row.payment_proof_url,
   delivery_method: row.delivery_method || 'personal',
@@ -267,7 +269,6 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
-
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
 
   await pool.query(`
@@ -318,18 +319,23 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(20) DEFAULT 'personal';`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
       client_id INTEGER REFERENCES users(id),
+      subtotal_amount DECIMAL(10,2),
       total_amount DECIMAL(10,2) NOT NULL,
+      discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
       payment_method VARCHAR(30) NOT NULL,
       payment_proof_url TEXT,
       status VARCHAR(20) NOT NULL DEFAULT 'pending',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal_amount DECIMAL(10,2);`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
+  await pool.query(`UPDATE orders SET subtotal_amount = total_amount WHERE subtotal_amount IS NULL;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
@@ -631,11 +637,12 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
     const discount = Math.min(100, Math.max(0, Number(product?.discount_percent || 0)));
     return { ...item, unit_price: Number(product?.price || item.unit_price) * (1 - discount / 100) };
   }));
-  const totalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
+  const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
+  const totalAmount = subtotalAmount;
   const exchangeRate = await getExchangeRate();
   const orderRes = await pool.query(
-    'INSERT INTO orders (client_id, total_amount, payment_method, payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
-    [userId, Number(totalAmount).toFixed(2), paymentMethod, paymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
+    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
+    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
   for (const item of pricedItems) {
@@ -699,8 +706,10 @@ export const addItemToOrder = async (orderId, item, userId) => {
 
     const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
     const finalPrice = Number(product.price) * (1 - discount / 100);
-    const nextTotal = Number(order.total_amount) + (finalPrice * quantity);
-    const updatedOrder = await client.query('UPDATE orders SET total_amount = $1 WHERE id = $2 RETURNING *', [nextTotal.toFixed(2), orderId]);
+    const nextSubtotal = Number(order.subtotal_amount ?? order.total_amount) + (finalPrice * quantity);
+    const orderDiscount = Math.min(100, Math.max(0, Number(order.discount_percent || 0)));
+    const nextTotal = nextSubtotal * (1 - orderDiscount / 100);
+    const updatedOrder = await client.query('UPDATE orders SET subtotal_amount = $1, total_amount = $2 WHERE id = $3 RETURNING *', [nextSubtotal.toFixed(2), nextTotal.toFixed(2), orderId]);
     await client.query(
       'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
       [userId, 'ADD_ORDER_ITEM', 'orders', orderId, JSON.stringify({ product_id: product.id, quantity, size: item.size, total_amount: nextTotal })]
@@ -713,6 +722,18 @@ export const addItemToOrder = async (orderId, item, userId) => {
   } finally {
     client.release();
   }
+};
+
+export const updateOrderDiscount = async (orderId, discountPercent, userId) => {
+  const discount = Math.min(100, Math.max(0, Number(discountPercent) || 0));
+  const result = await pool.query('SELECT id, total_amount, subtotal_amount, discount_percent FROM orders WHERE id = $1', [orderId]);
+  const order = result.rows[0];
+  if (!order) return null;
+  const subtotal = Number(order.subtotal_amount ?? order.total_amount);
+  const total = subtotal * (1 - discount / 100);
+  const updated = await pool.query('UPDATE orders SET subtotal_amount = $1, total_amount = $2, discount_percent = $3 WHERE id = $4 RETURNING *', [subtotal.toFixed(2), total.toFixed(2), discount, orderId]);
+  await pool.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DISCOUNT', 'orders', orderId, JSON.stringify({ discount_percent: discount, total_amount: total })]);
+  return mapOrder(updated.rows[0]);
 };
 
 export const getOrdersForUser = async (userId) => {
