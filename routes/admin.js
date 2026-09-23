@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -12,6 +12,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const adminRouter = express.Router();
+
+adminRouter.put('/products/discounts', authMiddleware, adminOnly, async (req, res) => {
+  const discount = Number(req.body?.discount_percent);
+  if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
+    return res.status(400).json({ error: 'El descuento debe estar entre 0 y 100.' });
+  }
+  res.json({ products: await updateAllProductDiscounts(discount) });
+});
 
 adminRouter.post('/content/upload', authMiddleware, adminOnly, (req, res) => {
   req.app.locals.upload.single('file')(req, res, (error) => {

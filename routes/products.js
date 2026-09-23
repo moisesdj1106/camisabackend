@@ -33,6 +33,7 @@ productsRouter.post('/', authMiddleware, adminOnly, audit('CREATE_PRODUCT', 'pro
     const product = await createProduct({
       ...req.body,
       price: Number(req.body.price),
+      discount_percent: Number(req.body.discount_percent) || 0,
       stock: Number(req.body.stock),
       club_id: Number(req.body.club_id),
       is_active: req.body.is_active !== false
@@ -48,6 +49,7 @@ productsRouter.put('/:id', authMiddleware, adminOnly, audit('UPDATE_PRODUCT', 'p
   const product = await updateProduct(Number(req.params.id), {
     ...req.body,
     price: Number(req.body.price),
+    discount_percent: Number(req.body.discount_percent) || 0,
     stock: Number(req.body.stock)
   });
   if (!product) return res.status(404).json({ error: 'Producto no encontrado' });

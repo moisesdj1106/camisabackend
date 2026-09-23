@@ -82,7 +82,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(409).json({ error: error.message || 'El inventario cambió. Revisa las tallas y vuelve a intentarlo.' });
     }
 
-    const invoiceItems = await Promise.all((items || []).map(async (item) => {
+    const invoiceItems = await Promise.all((result.items || []).map(async (item) => {
       const product = await getProductById(Number(item.product_id));
       return {
         ...item,

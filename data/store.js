@@ -75,7 +75,7 @@ const normalizeProductPayload = (payload = {}) => {
   };
 };
 
-const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'stock', 'stock_by_size', 'type', 'is_active', 'image_url', 'image_urls']);
+const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'discount_percent', 'stock', 'stock_by_size', 'type', 'is_active', 'image_url', 'image_urls']);
 
 const getDefaultExchangeRate = () => {
   const configured = Number(process.env.DEFAULT_EXCHANGE_RATE || 36);
@@ -97,6 +97,8 @@ const mapProduct = (row) => (row ? {
   title: row.title,
   description: row.description,
   price: Number(row.price),
+  discount_percent: Number(row.discount_percent || 0),
+  final_price: Number(row.price) * (1 - Math.min(100, Math.max(0, Number(row.discount_percent || 0))) / 100),
   stock: Number(row.stock),
   stock_by_size: parseStockBySize(row.stock_by_size),
   type: row.type,
@@ -242,6 +244,7 @@ export const initializeStore = async () => {
       title VARCHAR(200) NOT NULL,
       description TEXT,
       price DECIMAL(10,2) NOT NULL,
+      discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
       stock INTEGER NOT NULL DEFAULT 0,
       type VARCHAR(20) NOT NULL,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -263,6 +266,7 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
 
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
 
@@ -574,12 +578,18 @@ export const createProduct = async (payload) => {
   const nextId = Number(idResult.rows[0].max_id) + 1;
 
   const result = await pool.query(
-    'INSERT INTO products (id, club_id, title, description, price, stock, stock_by_size, type, is_active, image_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *',
-    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, normalizedPayload.stock, JSON.stringify(normalizedPayload.stock_by_size), normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || [])]
+    'INSERT INTO products (id, club_id, title, description, price, discount_percent, stock, stock_by_size, type, is_active, image_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
+    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, Math.min(100, Math.max(0, Number(normalizedPayload.discount_percent) || 0)), normalizedPayload.stock, JSON.stringify(normalizedPayload.stock_by_size), normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || [])]
   );
   const product = mapProduct(result.rows[0]);
   await syncProductDorsals(product.id, payload.dorsal_options || payload.dorsals || []);
   return product;
+};
+
+export const updateAllProductDiscounts = async (discountPercent) => {
+  const discount = Math.min(100, Math.max(0, Number(discountPercent) || 0));
+  const result = await pool.query('UPDATE products SET discount_percent = $1 RETURNING *', [discount]);
+  return result.rows.map(mapProduct);
 };
 
 export const updateProduct = async (id, payload) => {
@@ -616,14 +626,19 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
       throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
     }
   }
-  const totalAmount = items.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
+  const pricedItems = await Promise.all(items.map(async (item) => {
+    const product = await getProductById(Number(item.product_id));
+    const discount = Math.min(100, Math.max(0, Number(product?.discount_percent || 0)));
+    return { ...item, unit_price: Number(product?.price || item.unit_price) * (1 - discount / 100) };
+  }));
+  const totalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
   const exchangeRate = await getExchangeRate();
   const orderRes = await pool.query(
     'INSERT INTO orders (client_id, total_amount, payment_method, payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
     [userId, Number(totalAmount).toFixed(2), paymentMethod, paymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
-  for (const item of items) {
+  for (const item of pricedItems) {
     await pool.query(
       'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
       [order.id, item.product_id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, item.quantity, item.unit_price]
@@ -635,13 +650,17 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
       [order.id, shippingDetails.name, shippingDetails.phone, shippingDetails.cedula, shippingDetails.agency, shippingDetails.city, shippingDetails.state]
     );
   }
-  return { order, items };
+  return { order, items: pricedItems };
 };
 
 export const addItemToOrder = async (orderId, item, userId) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    if (!item.size || (item.no_dorsal !== true && !item.dorsal_number && !(item.custom_name && item.custom_number))) {
+      throw new Error('La camiseta debe tener una talla y un dorsal o personalización válida.');
+    }
 
     const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
     const order = orderResult.rows[0];
@@ -663,7 +682,7 @@ export const addItemToOrder = async (orderId, item, userId) => {
 
     await client.query(
       'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-      [orderId, product.id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, quantity, product.price]
+      [orderId, product.id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, quantity, Number(product.price) * (1 - Math.min(100, Math.max(0, Number(product.discount_percent || 0))) / 100)]
     );
 
     if (order.status === 'approved') {
@@ -678,7 +697,9 @@ export const addItemToOrder = async (orderId, item, userId) => {
       `, [quantity, product.id, item.size]);
     }
 
-    const nextTotal = Number(order.total_amount) + (Number(product.price) * quantity);
+    const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
+    const finalPrice = Number(product.price) * (1 - discount / 100);
+    const nextTotal = Number(order.total_amount) + (finalPrice * quantity);
     const updatedOrder = await client.query('UPDATE orders SET total_amount = $1 WHERE id = $2 RETURNING *', [nextTotal.toFixed(2), orderId]);
     await client.query(
       'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
