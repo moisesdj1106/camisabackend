@@ -74,7 +74,6 @@ const drawWhatsappIcon = (doc, x, y, size = 15) => {
     .lineTo(x + size * 0.12, y + size * 0.98)
     .lineTo(x + size * 0.38, y + size * 0.86)
     .stroke('#16a34a');
-  doc.fontSize(size * 0.36).fillColor('#16a34a').text('W', x + size * 0.34, y + size * 0.34, { width: size * 0.32, align: 'center', lineBreak: false });
   doc.restore();
 };
 
@@ -254,7 +253,7 @@ export const createApprovedOrdersPdf = async (orders) => {
           ? `#${item.dorsal_number}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`
           : 'N/D';
     const title = item.product_title || `Producto #${item.product_id}`;
-    const displayTitle = `${title} · ${productTypeLabel(item.product_type || item.type, title)}`;
+    const displayTitle = title;
     const personalizationHeight = doc.heightOfString(personalization, { width: 118, fontSize: 9 });
     const cardHeight = Math.max(96, doc.heightOfString(displayTitle, { width: 220, fontSize: 11 }) + personalizationHeight + 58);
     ensureSpace(cardHeight);
