@@ -86,7 +86,8 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       const product = await getProductById(Number(item.product_id));
       return {
         ...item,
-        product_title: product?.title || item.product_title || null
+        product_title: product?.title || item.product_title || null,
+        product_type: product?.type || item.product_type || null
       };
     }));
 

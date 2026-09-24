@@ -34,6 +34,14 @@ const orderStatusLabels = {
   cancelled: 'Cancelado'
 };
 
+const productTypeLabels = {
+  local: 'Local',
+  visitante: 'Visitante',
+  tercera: 'Alterna'
+};
+
+const productTypeLabel = (type) => productTypeLabels[type] || type || 'N/D';
+
 const drawCell = (doc, x, y, width, height, text, options = {}) => {
   doc.rect(x, y, width, height).stroke();
   doc.fontSize(options.fontSize || 10);
@@ -129,12 +137,13 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   let currentY = tableTop + 24;
   items.forEach((item, index) => {
     const label = item.product_title || `Producto #${item.product_id}`;
+    const type = productTypeLabel(item.product_type);
     const lineTotal = Number(item.unit_price || 0) * Number(item.quantity || 1);
     const lineBs = lineTotal * exchangeRate;
     const rowColor = index % 2 === 0 ? '#f8fbff' : '#eef5ff';
     doc.rect(40, currentY, 480, 24).fill(rowColor);
     drawCell(doc, 40, currentY, 40, 24, String(index + 1), { fontSize: 9 });
-    drawCell(doc, 80, currentY, 220, 24, `${label} · Talla ${item.size || 'N/D'}`, { fontSize: 8 });
+    drawCell(doc, 80, currentY, 220, 24, `${label} · ${type} · Talla ${item.size || 'N/D'}`, { fontSize: 8 });
     drawCell(doc, 300, currentY, 60, 24, String(item.quantity || 1), { fontSize: 10 });
     drawCell(doc, 360, currentY, 80, 24, `${lineTotal.toFixed(2)}`, { fontSize: 10, align: 'right' });
     drawCell(doc, 440, currentY, 80, 24, `${lineBs.toFixed(2)}`, { fontSize: 10, align: 'right' });
@@ -231,14 +240,15 @@ export const createApprovedOrdersPdf = async (orders) => {
           ? `#${item.dorsal_number}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`
           : 'N/D';
     const title = item.product_title || `Producto #${item.product_id}`;
+    const displayTitle = `${title} · ${productTypeLabel(item.product_type)}`;
     const personalizationHeight = doc.heightOfString(personalization, { width: 118, fontSize: 9 });
-    const cardHeight = Math.max(96, doc.heightOfString(title, { width: 245, fontSize: 11 }) + personalizationHeight + 58);
+    const cardHeight = Math.max(96, doc.heightOfString(displayTitle, { width: 245, fontSize: 11 }) + personalizationHeight + 58);
     ensureSpace(cardHeight);
     const cardY = doc.y;
     const background = index % 2 === 0 ? '#f8fbff' : '#f1f6fc';
     doc.roundedRect(contentX, cardY, contentWidth, cardHeight, 8).fill(background).strokeColor('#dbe5f1').stroke();
     doc.roundedRect(contentX, cardY, 7, cardHeight, 3).fill('#2563eb');
-    drawLabelValue('Camiseta', title, contentX + 22, cardY + 14, 245);
+    drawLabelValue('Camiseta', displayTitle, contentX + 22, cardY + 14, 245);
     drawLabelValue('Equipo', item.club_name || 'Sin equipo', contentX + 282, cardY + 14, 215);
     drawLabelValue('Talla', item.size || 'N/D', contentX + 22, cardY + 52, 72);
     drawLabelValue('Dorsal', dorsal, contentX + 105, cardY + 52, 130);

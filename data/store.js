@@ -138,6 +138,7 @@ const mapOrderItem = (row) => (row ? {
   order_id: row.order_id,
   product_id: row.product_id,
   product_title: row.product_title,
+  product_type: row.product_type,
   club_name: row.club_name,
   size: row.size,
   no_dorsal: row.no_dorsal,
@@ -790,7 +791,7 @@ export const getOrdersForUser = async (userId) => {
   const orders = await Promise.all(result.rows.map(async (row) => {
     const order = mapOrder(row);
     const itemsResult = await pool.query(`
-      SELECT oi.*, p.title AS product_title
+      SELECT oi.*, p.title AS product_title, p.type AS product_type
       FROM order_items oi
       LEFT JOIN products p ON p.id = oi.product_id
       WHERE oi.order_id = $1
@@ -830,7 +831,7 @@ export const deleteOrder = async (orderId, userId) => {
 
 export const getOrderItemsByOrderId = async (orderId) => {
   const result = await pool.query(`
-    SELECT oi.*, p.title AS product_title, c.name AS club_name
+    SELECT oi.*, p.title AS product_title, p.type AS product_type, c.name AS club_name
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
     LEFT JOIN clubs c ON c.id = p.club_id
@@ -850,7 +851,7 @@ export const getOrderDetailById = async (orderId, userId = null, isAdmin = false
   const order = mapOrder(orderResult.rows[0]);
   if (!isAdmin && userId !== null && order.client_id !== userId) return null;
   const itemsResult = await pool.query(`
-    SELECT oi.*, p.title AS product_title, c.name AS club_name
+    SELECT oi.*, p.title AS product_title, p.type AS product_type, c.name AS club_name
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
     LEFT JOIN clubs c ON c.id = p.club_id
