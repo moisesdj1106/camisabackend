@@ -214,7 +214,7 @@ export const createApprovedOrdersPdf = async (orders) => {
       doc.image(logoImage, contentX, footerY - 2, { fit: [52, 36], align: 'center', valign: 'center' });
     }
     doc.fontSize(8).fillColor('#64748b').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', contentX + 62, footerY + 5);
-    doc.text('Teléfono: +58 0414-714-6602  ·  @mdj_soccer', contentX + 62, footerY + 19);
+    doc.text('Teléfono: +58 0414-714-6602  ·  @mdj_soccer - Tienda Online', contentX + 62, footerY + 19);
     doc.text(`Pedidos aceptados · Página ${pageNumber}`, contentX, footerY + 19, { width: contentWidth, align: 'right' });
   };
 
