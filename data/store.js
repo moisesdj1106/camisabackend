@@ -725,6 +725,107 @@ export const addItemToOrder = async (orderId, item, userId) => {
   }
 };
 
+const parseProductStock = (product) => typeof product.stock_by_size === 'string'
+  ? JSON.parse(product.stock_by_size || '{}')
+  : (product.stock_by_size || {});
+
+const adjustProductStock = async (client, productId, size, amount) => {
+  await client.query(`
+    UPDATE products
+    SET stock = GREATEST(0, stock + $1),
+        stock_by_size = CASE
+          WHEN stock_by_size ? $3 THEN jsonb_set(stock_by_size, ARRAY[$3], to_jsonb(GREATEST(0, COALESCE((stock_by_size ->> $3)::int, 0) + $1)), true)
+          ELSE stock_by_size
+        END
+    WHERE id = $2
+  `, [amount, productId, size]);
+};
+
+const recalculateOrderTotal = async (client, orderId, discountPercent) => {
+  const itemsResult = await client.query('SELECT quantity, unit_price FROM order_items WHERE order_id = $1', [orderId]);
+  const subtotal = itemsResult.rows.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
+  const total = subtotal * (1 - Math.min(100, Math.max(0, Number(discountPercent || 0))) / 100);
+  return client.query('UPDATE orders SET subtotal_amount = $1, total_amount = $2 WHERE id = $3 RETURNING *', [subtotal.toFixed(2), total.toFixed(2), orderId]);
+};
+
+export const updateOrderItem = async (orderId, itemId, item, userId) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) throw new Error('Pedido no encontrado.');
+    if (['cancelled', 'rejected', 'delivered'].includes(order.status)) throw new Error('No se puede modificar un pedido cerrado.');
+
+    const itemResult = await client.query('SELECT * FROM order_items WHERE id = $1 AND order_id = $2 FOR UPDATE', [itemId, orderId]);
+    const currentItem = itemResult.rows[0];
+    if (!currentItem) throw new Error('Producto del pedido no encontrado.');
+    if (!item.size || (item.no_dorsal !== true && !item.dorsal_number && !(item.custom_name && item.custom_number))) {
+      throw new Error('La camiseta debe tener una talla y un dorsal o personalización válida.');
+    }
+
+    const oldProductResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [currentItem.product_id]);
+    const oldProduct = oldProductResult.rows[0];
+    const productId = Number(item.product_id || currentItem.product_id);
+    const product = productId === Number(currentItem.product_id)
+      ? oldProduct
+      : (await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [productId])).rows[0];
+    if (!product || !product.is_active) throw new Error('El producto seleccionado no está disponible.');
+
+    const quantity = Math.max(1, Number(item.quantity) || 1);
+    if (order.status === 'approved') {
+      await adjustProductStock(client, oldProduct.id, currentItem.size, Number(currentItem.quantity));
+      const stockBySize = parseProductStock(product);
+      const available = Object.keys(stockBySize).length ? Number(stockBySize[item.size] || 0) : Number(product.stock || 0);
+      if (available < quantity) throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
+      await adjustProductStock(client, product.id, item.size, -quantity);
+    }
+
+    const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
+    const unitPrice = Number(product.price) * (1 - discount / 100);
+    await client.query(`
+      UPDATE order_items
+      SET product_id = $1, size = $2, no_dorsal = $3, dorsal_number = $4, dorsal_name = $5,
+          custom_name = $6, custom_number = $7, quantity = $8, unit_price = $9
+      WHERE id = $10 AND order_id = $11
+    `, [product.id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, quantity, unitPrice, itemId, orderId]);
+    const updatedOrder = await recalculateOrderTotal(client, orderId, order.discount_percent);
+    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_ITEM', 'orders', orderId, JSON.stringify({ item_id: itemId, product_id: product.id, size: item.size, quantity })]);
+    await client.query('COMMIT');
+    return mapOrder(updatedOrder.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+export const deleteOrderItem = async (orderId, itemId, userId) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) throw new Error('Pedido no encontrado.');
+    if (['cancelled', 'rejected', 'delivered'].includes(order.status)) throw new Error('No se puede modificar un pedido cerrado.');
+    const itemResult = await client.query('SELECT * FROM order_items WHERE id = $1 AND order_id = $2 FOR UPDATE', [itemId, orderId]);
+    const item = itemResult.rows[0];
+    if (!item) throw new Error('Producto del pedido no encontrado.');
+    if (order.status === 'approved') await adjustProductStock(client, item.product_id, item.size, Number(item.quantity));
+    await client.query('DELETE FROM order_items WHERE id = $1 AND order_id = $2', [itemId, orderId]);
+    const updatedOrder = await recalculateOrderTotal(client, orderId, order.discount_percent);
+    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'DELETE_ORDER_ITEM', 'orders', orderId, JSON.stringify({ item_id: itemId, product_id: item.product_id, quantity: item.quantity })]);
+    await client.query('COMMIT');
+    return mapOrder(updatedOrder.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 export const updateOrderDiscount = async (orderId, discountPercent, userId) => {
   const discount = Math.min(100, Math.max(0, Number(discountPercent) || 0));
   const result = await pool.query('SELECT id, total_amount, subtotal_amount, discount_percent FROM orders WHERE id = $1', [orderId]);

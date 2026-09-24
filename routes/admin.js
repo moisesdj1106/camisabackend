@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -160,6 +160,24 @@ adminRouter.post('/orders/:id/items', authMiddleware, adminOnly, async (req, res
     res.status(201).json(order);
   } catch (error) {
     res.status(400).json({ error: error.message || 'No se pudo agregar el producto al pedido.' });
+  }
+});
+
+adminRouter.put('/orders/:orderId/items/:itemId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const order = await updateOrderItem(Number(req.params.orderId), Number(req.params.itemId), req.body || {}, req.user.id);
+    res.json(order);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudo actualizar el producto del pedido.' });
+  }
+});
+
+adminRouter.delete('/orders/:orderId/items/:itemId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const order = await deleteOrderItem(Number(req.params.orderId), Number(req.params.itemId), req.user.id);
+    res.json(order);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudo eliminar el producto del pedido.' });
   }
 });
 
