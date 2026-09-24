@@ -138,7 +138,7 @@ const mapOrderItem = (row) => (row ? {
   order_id: row.order_id,
   product_id: row.product_id,
   product_title: row.product_title,
-  product_type: row.product_type,
+  product_type: row.product_type || row.type,
   club_name: row.club_name,
   size: row.size,
   no_dorsal: row.no_dorsal,

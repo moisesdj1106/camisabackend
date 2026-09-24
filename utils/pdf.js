@@ -40,7 +40,14 @@ const productTypeLabels = {
   tercera: 'Alterna'
 };
 
-const productTypeLabel = (type) => productTypeLabels[type] || type || 'N/D';
+const productTypeLabel = (type, title = '') => {
+  const normalizedType = String(type || '').trim().toLowerCase();
+  if (productTypeLabels[normalizedType]) return productTypeLabels[normalizedType];
+  const normalizedTitle = String(title).toLowerCase();
+  if (/\bvisitante\b/.test(normalizedTitle)) return 'Visitante';
+  if (/\b(local|alterna|alternativa|tercera)\b/.test(normalizedTitle)) return normalizedTitle.includes('local') ? 'Local' : 'Alterna';
+  return 'N/D';
+};
 
 const drawCell = (doc, x, y, width, height, text, options = {}) => {
   doc.rect(x, y, width, height).stroke();
@@ -129,7 +136,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     doc.fillColor('#ffffff').fontSize(9).text(text, x + 8, tableTop + 7, { width: width - 12, align });
   };
   tableHeader(40, 40, 'Nº');
-  tableHeader(80, 220, 'Producto');
+  tableHeader(80, 150, 'Producto');
+  tableHeader(230, 70, 'Tipo');
   tableHeader(300, 60, 'Cant.', 'center');
   tableHeader(360, 80, 'USD', 'right');
   tableHeader(440, 80, 'BS', 'right');
@@ -137,13 +145,14 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   let currentY = tableTop + 24;
   items.forEach((item, index) => {
     const label = item.product_title || `Producto #${item.product_id}`;
-    const type = productTypeLabel(item.product_type);
+    const type = productTypeLabel(item.product_type || item.type, label);
     const lineTotal = Number(item.unit_price || 0) * Number(item.quantity || 1);
     const lineBs = lineTotal * exchangeRate;
     const rowColor = index % 2 === 0 ? '#f8fbff' : '#eef5ff';
     doc.rect(40, currentY, 480, 24).fill(rowColor);
     drawCell(doc, 40, currentY, 40, 24, String(index + 1), { fontSize: 9 });
-    drawCell(doc, 80, currentY, 220, 24, `${label} · ${type} · Talla ${item.size || 'N/D'}`, { fontSize: 8 });
+    drawCell(doc, 80, currentY, 150, 24, `${label} · Talla ${item.size || 'N/D'}`, { fontSize: 8 });
+    drawCell(doc, 230, currentY, 70, 24, type, { fontSize: 8 });
     drawCell(doc, 300, currentY, 60, 24, String(item.quantity || 1), { fontSize: 10 });
     drawCell(doc, 360, currentY, 80, 24, `${lineTotal.toFixed(2)}`, { fontSize: 10, align: 'right' });
     drawCell(doc, 440, currentY, 80, 24, `${lineBs.toFixed(2)}`, { fontSize: 10, align: 'right' });
@@ -240,9 +249,9 @@ export const createApprovedOrdersPdf = async (orders) => {
           ? `#${item.dorsal_number}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`
           : 'N/D';
     const title = item.product_title || `Producto #${item.product_id}`;
-    const displayTitle = `${title} · ${productTypeLabel(item.product_type)}`;
+    const displayTitle = `${title} · ${productTypeLabel(item.product_type || item.type, title)}`;
     const personalizationHeight = doc.heightOfString(personalization, { width: 118, fontSize: 9 });
-    const cardHeight = Math.max(96, doc.heightOfString(displayTitle, { width: 245, fontSize: 11 }) + personalizationHeight + 58);
+    const cardHeight = Math.max(136, doc.heightOfString(displayTitle, { width: 245, fontSize: 11 }) + personalizationHeight + 58);
     ensureSpace(cardHeight);
     const cardY = doc.y;
     const background = index % 2 === 0 ? '#f8fbff' : '#f1f6fc';
@@ -254,6 +263,7 @@ export const createApprovedOrdersPdf = async (orders) => {
     drawLabelValue('Dorsal', dorsal, contentX + 105, cardY + 52, 130);
     drawLabelValue('Cantidad', `${item.quantity || 1} unidad (es)`, contentX + 248, cardY + 52, 112);
     drawLabelValue('Personalizada', personalization, contentX + 372, cardY + 52, 125);
+    drawLabelValue('Tipo', productTypeLabel(item.product_type || item.type, title), contentX + 22, cardY + 91, 130);
     doc.y = cardY + cardHeight + 8;
   };
 
