@@ -187,15 +187,15 @@ export const resetRevenueMetrics = async () => {
 
 export const listClubs = async () => {
   const result = await pool.query('SELECT * FROM clubs ORDER BY id ASC');
-  return result.rows.map((row) => ({ id: Number(row.id), name: row.name, country: row.country, logo_url: row.logo_url }));
+  return result.rows.map((row) => ({ id: Number(row.id), name: row.name, country: row.country, logo_url: row.logo_url, category: row.category || 'club' }));
 };
 
 export const createClub = async (payload) => {
   const idResult = await pool.query('SELECT COALESCE(MAX(id), 0)::int AS max_id FROM clubs');
   const nextId = Number(idResult.rows[0].max_id) + 1;
   const result = await pool.query(
-    'INSERT INTO clubs (id, name, country, logo_url) VALUES ($1, $2, $3, $4) RETURNING *',
-    [nextId, payload.name, payload.country || null, payload.logo_url || null]
+    'INSERT INTO clubs (id, name, country, logo_url, category) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [nextId, payload.name, payload.country || null, payload.logo_url || null, payload.category === 'selection' ? 'selection' : 'club']
   );
   return result.rows[0];
 };
@@ -203,11 +203,17 @@ export const createClub = async (payload) => {
 export const updateClub = async (id, payload) => {
   const fields = [];
   const values = [];
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value === undefined || key === 'id') return;
+  ['name', 'country', 'logo_url'].forEach((key) => {
+    const value = payload[key];
+    if (value === undefined) return;
     fields.push(`${key} = $${fields.length + 1}`);
     values.push(value);
   });
+  if (payload.category !== undefined) {
+    fields.push(`category = $${fields.length + 1}`);
+    values.push(payload.category === 'selection' ? 'selection' : 'club');
+  }
+  if (!fields.length) return (await pool.query('SELECT * FROM clubs WHERE id = $1', [id])).rows[0];
   values.push(id);
   const result = await pool.query(`UPDATE clubs SET ${fields.join(', ')} WHERE id = $${fields.length + 1} RETURNING *`, values);
   return result.rows[0];
@@ -236,7 +242,8 @@ export const initializeStore = async () => {
       id INTEGER PRIMARY KEY,
       name VARCHAR(150) NOT NULL,
       country VARCHAR(100),
-      logo_url TEXT
+      logo_url TEXT,
+      category VARCHAR(20) NOT NULL DEFAULT 'club'
     );
   `);
 
@@ -271,6 +278,7 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
+  await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS category VARCHAR(20) NOT NULL DEFAULT 'club';`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS product_likes (
@@ -459,7 +467,7 @@ export const createUser = async (payload) => {
 
 export const listProducts = async (filters = {}) => {
   let query = `
-    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url,
+    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url, c.category AS club_category,
       (SELECT COUNT(*)::int FROM product_likes pl WHERE pl.product_id = p.id) AS likes_count
     FROM products p
     LEFT JOIN clubs c ON c.id = p.club_id
@@ -492,13 +500,13 @@ export const listProducts = async (filters = {}) => {
   const result = await pool.query(query, values);
   return result.rows.map((row) => ({
     ...mapProduct(row),
-    club: row.club_name ? { id: row.club_id_ref, name: row.club_name, country: row.club_country, logo_url: row.club_logo_url } : null
+    club: row.club_name ? { id: row.club_id_ref, name: row.club_name, country: row.club_country, logo_url: row.club_logo_url, category: row.club_category || 'club' } : null
   }));
 };
 
 export const getProductById = async (id) => {
   const productRes = await pool.query(`
-    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url,
+    SELECT p.*, c.id AS club_id_ref, c.name AS club_name, c.country AS club_country, c.logo_url AS club_logo_url, c.category AS club_category,
       (SELECT COUNT(*)::int FROM product_likes pl WHERE pl.product_id = p.id) AS likes_count
     FROM products p
     LEFT JOIN clubs c ON c.id = p.club_id
@@ -509,7 +517,7 @@ export const getProductById = async (id) => {
   const product = productRes.rows[0];
   return {
     ...mapProduct(product),
-    club: product.club_name ? { id: product.club_id_ref, name: product.club_name, country: product.club_country, logo_url: product.club_logo_url } : null,
+    club: product.club_name ? { id: product.club_id_ref, name: product.club_name, country: product.club_country, logo_url: product.club_logo_url, category: product.club_category || 'club' } : null,
     dorsals: dorsalsRes.rows.map(mapDorsal)
   };
 };
