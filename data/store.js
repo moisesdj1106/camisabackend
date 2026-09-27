@@ -1,5 +1,6 @@
 import fs from 'fs';
 import pkg from 'pg';
+import { hashPassword } from '../utils/auth.js';
 import { sendOrderApprovedEmail } from '../utils/mail.js';
 import { createNotification } from '../utils/notifications.js';
 import { uploadDir } from '../utils/storage.js';
@@ -667,6 +668,82 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
     );
   }
   return { order, items: pricedItems };
+};
+
+export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('Debes agregar al menos un producto al pedido.');
+  }
+  if (!['whatsapp', 'pago_movil', 'efectivo'].includes(paymentMethod)) {
+    throw new Error('Debes seleccionar un método de pago válido.');
+  }
+  if (!['personal', 'national'].includes(deliveryMethod)) {
+    throw new Error('Debes seleccionar una modalidad de entrega válida.');
+  }
+  if (paymentMethod === 'efectivo' && deliveryMethod !== 'personal') {
+    throw new Error('El pago en efectivo solo está disponible para entrega personal.');
+  }
+  if (deliveryMethod === 'national' && (!shippingDetails?.name || !shippingDetails?.phone || !shippingDetails?.cedula || !shippingDetails?.agency || !shippingDetails?.city || !shippingDetails?.state)) {
+    throw new Error('Completa todos los datos del envío nacional.');
+  }
+
+  const normalizedName = String(clientData?.name || '').trim();
+  const normalizedEmail = String(clientData?.email || '').trim().toLowerCase();
+  const normalizedPhone = String(clientData?.phone || '').trim();
+
+  if (!normalizedName || !normalizedEmail) {
+    throw new Error('Nombre y correo del cliente son obligatorios.');
+  }
+
+  let user = null;
+  if (clientData?.client_id) {
+    user = await getUserById(Number(clientData.client_id));
+  }
+  if (!user) {
+    user = await findUserByEmail(normalizedEmail);
+  }
+  if (!user) {
+    const password = await hashPassword('Cliente123!');
+    user = await createUser({
+      name: normalizedName,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      password,
+      role: 'client'
+    });
+  }
+
+  const finalItems = items.map((item) => ({
+    product_id: Number(item.product_id),
+    size: String(item.size || '').trim().toUpperCase(),
+    quantity: Math.max(1, Number(item.quantity) || 1),
+    no_dorsal: item.no_dorsal !== false,
+    custom_name: item.custom_name || null,
+    custom_number: item.custom_number || null,
+    dorsal_number: item.dorsal_number || null,
+    dorsal_name: item.dorsal_name || null
+  }));
+
+  const order = await createOrder({
+    userId: user.id,
+    items: finalItems,
+    paymentMethod,
+    paymentProofUrl,
+    deliveryMethod,
+    shippingDetails
+  });
+
+  if (status && status !== 'pending') {
+    await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, order.order.id]);
+    order.order.status = status;
+  }
+
+  await pool.query(
+    'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
+    [adminUserId, 'CREATE_ORDER_MANUAL', 'orders', order.order.id, JSON.stringify({ client_id: user.id, status, payment_method: paymentMethod, delivery_method: deliveryMethod })]
+  );
+
+  return { ...order, client: user };
 };
 
 export const addItemToOrder = async (orderId, item, userId) => {

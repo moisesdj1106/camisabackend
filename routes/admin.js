@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -127,6 +127,25 @@ adminRouter.get('/orders', authMiddleware, adminOnly, async (req, res) => {
     client: await getUserById(order.client_id)
   })));
   res.json(ordersWithClient);
+});
+
+adminRouter.post('/orders/manual', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { client, items, payment_method, payment_proof_url, delivery_method, shipping_details, status } = req.body || {};
+    const order = await createOrderManually({
+      adminUserId: req.user.id,
+      clientData: client || {},
+      items: Array.isArray(items) ? items : [],
+      paymentMethod: payment_method,
+      paymentProofUrl: payment_proof_url || null,
+      deliveryMethod: delivery_method || 'personal',
+      shippingDetails: shipping_details || null,
+      status: status || 'pending'
+    });
+    res.status(201).json(order);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
+  }
 });
 
 adminRouter.put('/orders/:id/status', authMiddleware, adminOnly, async (req, res) => {
