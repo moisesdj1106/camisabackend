@@ -76,7 +76,7 @@ const normalizeProductPayload = (payload = {}) => {
   };
 };
 
-const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'discount_percent', 'stock', 'stock_by_size', 'type', 'is_active', 'image_url', 'image_urls']);
+const PRODUCT_COLUMN_KEYS = new Set(['club_id', 'title', 'description', 'price', 'discount_percent', 'stock', 'stock_by_size', 'type', 'is_active', 'image_url', 'image_urls', 'allow_no_dorsal', 'allow_catalog_dorsal', 'allow_custom_dorsal']);
 
 const getDefaultExchangeRate = () => {
   const configured = Number(process.env.DEFAULT_EXCHANGE_RATE || 36);
@@ -92,6 +92,19 @@ const getProductFieldEntries = (payload) => {
   }, []);
 };
 
+const validateProductDorsalOption = (product, item) => {
+  if (!product) throw new Error('El producto seleccionado no está disponible.');
+  if (item.no_dorsal === true && product.allow_no_dorsal === false) {
+    throw new Error(`La camiseta ${product.title} no se vende sin dorsal.`);
+  }
+  if (item.custom_name && product.allow_custom_dorsal === false) {
+    throw new Error(`La camiseta ${product.title} no permite personalización.`);
+  }
+  if (item.dorsal_number && product.allow_catalog_dorsal === false) {
+    throw new Error(`La camiseta ${product.title} no permite dorsales de jugador.`);
+  }
+};
+
 const mapProduct = (row) => (row ? {
   id: row.id,
   club_id: row.club_id,
@@ -103,6 +116,9 @@ const mapProduct = (row) => (row ? {
   stock: Number(row.stock),
   stock_by_size: parseStockBySize(row.stock_by_size),
   type: row.type,
+  allow_no_dorsal: row.allow_no_dorsal !== false,
+  allow_catalog_dorsal: row.allow_catalog_dorsal !== false,
+  allow_custom_dorsal: row.allow_custom_dorsal !== false,
   is_active: row.is_active,
   created_at: row.created_at,
   image_url: row.image_url || (parseImageUrls(row.image_urls)[0] || null),
@@ -262,6 +278,9 @@ export const initializeStore = async () => {
       image_url TEXT,
       image_urls JSONB DEFAULT '[]'::jsonb,
       stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb,
+      allow_no_dorsal BOOLEAN NOT NULL DEFAULT TRUE,
+      allow_catalog_dorsal BOOLEAN NOT NULL DEFAULT TRUE,
+      allow_custom_dorsal BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -278,6 +297,9 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_by_size JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_no_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_catalog_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_custom_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS category VARCHAR(20) NOT NULL DEFAULT 'club';`);
 
@@ -594,8 +616,8 @@ export const createProduct = async (payload) => {
   const nextId = Number(idResult.rows[0].max_id) + 1;
 
   const result = await pool.query(
-    'INSERT INTO products (id, club_id, title, description, price, discount_percent, stock, stock_by_size, type, is_active, image_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
-    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, Math.min(100, Math.max(0, Number(normalizedPayload.discount_percent) || 0)), normalizedPayload.stock, JSON.stringify(normalizedPayload.stock_by_size), normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || [])]
+    'INSERT INTO products (id, club_id, title, description, price, discount_percent, stock, stock_by_size, type, is_active, image_url, image_urls, allow_no_dorsal, allow_catalog_dorsal, allow_custom_dorsal) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *',
+    [nextId, normalizedPayload.club_id, normalizedPayload.title, normalizedPayload.description || '', normalizedPayload.price, Math.min(100, Math.max(0, Number(normalizedPayload.discount_percent) || 0)), normalizedPayload.stock, JSON.stringify(normalizedPayload.stock_by_size), normalizedPayload.type, normalizedPayload.is_active !== false, normalizedPayload.image_url || null, JSON.stringify(normalizedPayload.image_urls || []), normalizedPayload.allow_no_dorsal !== false, normalizedPayload.allow_catalog_dorsal !== false, normalizedPayload.allow_custom_dorsal !== false]
   );
   const product = mapProduct(result.rows[0]);
   await syncProductDorsals(product.id, payload.dorsal_options || payload.dorsals || []);
@@ -636,6 +658,7 @@ export const deleteProduct = async (id) => {
 export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails }) => {
   for (const item of items) {
     const product = await getProductById(Number(item.product_id));
+    validateProductDorsalOption(product, item);
     const stockBySize = product?.stock_by_size || {};
     if (Object.keys(stockBySize).length && Number(item.quantity) > Number(stockBySize[item.size] || 0)) {
       const available = Number(stockBySize[item.size] || 0);
