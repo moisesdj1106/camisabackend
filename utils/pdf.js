@@ -103,45 +103,83 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const totalBs = totalUsd * exchangeRate;
   const invoiceNumber = order.invoice_number || `INV-${String(order.id).padStart(4, '0')}`;
 
+  const accentBlue = '#0f2d52';
+  const accentLight = '#eaf3ff';
+  const accentMid = '#2563eb';
+  const textStrong = '#0f172a';
+  const textSoft = '#475569';
+  const borderColor = '#dbeafe';
+  const rowEven = '#f8fbff';
+  const rowOdd = '#eef5ff';
+
+  const drawSummaryCard = (x, y, width, height, title, lines, dark = false) => {
+    const fillColor = dark ? accentBlue : '#ffffff';
+    const titleColor = dark ? '#ffffff' : accentBlue;
+    const textColor = dark ? '#dbeafe' : textStrong;
+    doc.roundedRect(x, y, width, height, 12).fill(fillColor).strokeColor(borderColor).stroke();
+    doc.roundedRect(x, y, width, 26, 12).fill(dark ? '#1d4ed8' : accentLight);
+    doc.fillColor(titleColor).fontSize(9.5).text(title.toUpperCase(), x + 12, y + 8, { width: width - 24, align: 'left' });
+
+    let lineY = y + 38;
+    lines.forEach((line) => {
+      doc.fillColor(textColor).fontSize(9.5).text(String(line), x + 12, lineY, { width: width - 24 });
+      lineY += 16;
+    });
+  };
+
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
-  doc.roundedRect(40, 40, 480, 92, 12).fill('#0f2d52');
-  doc.fillColor('#ffffff').fontSize(23).text('MDJ SOCCER', 60, 58);
-  doc.fontSize(9).fillColor('#cfe4ff').text('Camisetas deportivas Triple A', 60, 88);
-  doc.fontSize(10).fillColor('#ffffff').text(`FACTURA Nº ${invoiceNumber}`, 370, 62, { width: 130, align: 'right' });
-  doc.fontSize(10).fillColor('#cfe4ff').text(`Pedido #${order.id}`, 370, 82, { width: 130, align: 'right' });
-  doc.y = 150;
 
-  const headerY = doc.y;
-  drawCell(doc, 40, headerY, 240, 30, 'DATOS DEL CLIENTE', { fontSize: 10, color: '#ffffff' });
-  doc.rect(40, headerY, 240, 30).fill('#2563eb');
-  doc.fillColor('#ffffff').fontSize(10).text('DATOS DEL CLIENTE', 48, headerY + 8);
-  doc.rect(280, headerY, 240, 30).fill('#2563eb');
-  doc.fillColor('#ffffff').fontSize(10).text('DATOS DE LA EMPRESA', 288, headerY + 8);
+  doc.fillColor('#f4f8ff').rect(0, 0, doc.page.width, 700).fill();
+  doc.roundedRect(38, 36, 516, 86, 18).fill(accentBlue);
+  if (logoImage) {
+    doc.image(logoImage, 58, 52, { fit: [72, 54], align: 'center', valign: 'center' });
+  }
+  doc.fillColor('#ffffff').fontSize(24).text('MDJ SOCCER', 145, 56);
+  doc.fillColor('#cfe4ff').fontSize(9).text('Camisetas deportivas · San Cristóbal', 145, 89);
 
-  drawCell(doc, 40, headerY + 30, 240, 42, `${client?.name || 'Cliente'}\n${client?.email || ''}`, { fontSize: 10 });
-  drawCell(doc, 280, headerY + 30, 240, 42, 'MDJ SOCCER\nmdjsoccer@gmail.com\n+58 0414-714-6602', { fontSize: 10 });
+  doc.roundedRect(394, 46, 140, 46, 10).fill('#1d4ed8');
+  doc.fillColor('#ffffff').fontSize(8.5).text('FACTURA', 422, 56, { width: 90, align: 'center' });
+  doc.fillColor('#dbeafe').fontSize(11).text(invoiceNumber, 422, 70, { width: 90, align: 'center' });
 
-  drawCell(doc, 40, headerY + 72, 240, 30, `Método de pago: ${paymentMethodLabels[order.payment_method] || order.payment_method || 'No indicado'}`, { fontSize: 9 });
-  drawCell(doc, 280, headerY + 72, 240, 30, `Tasa de cambio: ${exchangeRate.toFixed(2)} BS/USD`, { fontSize: 9 });
-  doc.roundedRect(40, headerY + 102, 480, 26, 5).fill('#e8f1ff');
-  doc.fillColor('#1e3a8a').fontSize(10).text(`Estado del pedido: ${orderStatusLabels[order.status] || order.status || 'No indicado'}`, 48, headerY + 110);
+  drawSummaryCard(40, 146, 245, 92, 'Cliente', [
+    client?.name || 'Cliente',
+    client?.email || 'Sin correo',
+    client?.phone || 'Sin teléfono'
+  ]);
 
-  doc.moveDown(2.2);
-  doc.fontSize(13).fillColor('#0f2d52').text('Detalle de compra');
-  const tableTop = doc.y + 5;
+  drawSummaryCard(295, 146, 259, 92, 'Pedido', [
+    `#${order.id}`,
+    `Estado: ${orderStatusLabels[order.status] || order.status || 'No indicado'}`,
+    `Método: ${paymentMethodLabels[order.payment_method] || order.payment_method || 'No indicado'}`
+  ], true);
+
+  drawSummaryCard(40, 252, 245, 90, 'Empresa', [
+    'MDJ SOCCER',
+    'mdjsoccer@gmail.com',
+    '+58 0414-714-6602'
+  ]);
+
+  drawSummaryCard(295, 252, 259, 90, 'Resumen', [
+    `Tipo de cambio: ${exchangeRate.toFixed(2)} BS/USD`,
+    `Fecha: ${new Date(order.created_at || Date.now()).toLocaleDateString('es-VE')}`,
+    `Entrega: ${order.delivery_method || 'No indicado'}`
+  ]);
+
+  doc.fontSize(14).fillColor(accentBlue).text('Detalle de compra', 40, 356);
+  const tableTop = 380;
   const tableHeader = (x, width, text, align = 'left') => {
-    doc.rect(x, tableTop, width, 24).fill('#0f2d52');
-    doc.fillColor('#ffffff').fontSize(9).text(text, x + 8, tableTop + 7, { width: width - 12, align });
+    doc.roundedRect(x, tableTop, width, 24, 6).fill(accentBlue);
+    doc.fillColor('#ffffff').fontSize(8.8).text(text, x + 8, tableTop + 7, { width: width - 12, align });
   };
-  tableHeader(40, 30, 'Nº');
-  tableHeader(70, 120, 'Producto');
-  tableHeader(190, 55, 'Tipo');
-  tableHeader(245, 45, 'Talla');
-  tableHeader(290, 80, 'Dorsal');
-  tableHeader(370, 45, 'Cant.', 'center');
-  tableHeader(415, 52, 'USD', 'right');
-  tableHeader(467, 53, 'BS', 'right');
+  tableHeader(40, 26, 'Nº');
+  tableHeader(66, 134, 'Producto');
+  tableHeader(200, 58, 'Tipo');
+  tableHeader(258, 44, 'Talla');
+  tableHeader(302, 74, 'Dorsal');
+  tableHeader(376, 42, 'Cant.');
+  tableHeader(418, 52, 'USD', 'right');
+  tableHeader(470, 84, 'BS', 'right');
 
   let currentY = tableTop + 24;
   items.forEach((item, index) => {
@@ -149,40 +187,52 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     const type = productTypeLabel(item.product_type || item.type, label);
     const lineTotal = Number(item.unit_price || 0) * Number(item.quantity || 1);
     const lineBs = lineTotal * exchangeRate;
-    const rowColor = index % 2 === 0 ? '#f8fbff' : '#eef5ff';
-    doc.rect(40, currentY, 480, 24).fill(rowColor);
+    const rowColor = index % 2 === 0 ? rowEven : rowOdd;
+    doc.roundedRect(40, currentY, 514, 24, 5).fill(rowColor).strokeColor(borderColor).stroke();
     const dorsal = item.custom_name ? 'Personalizada' : item.no_dorsal ? 'Sin dorsal' : item.dorsal_number ? `#${item.dorsal_number}` : 'N/D';
-    drawCell(doc, 40, currentY, 30, 24, String(index + 1), { fontSize: 9 });
-    drawCell(doc, 70, currentY, 120, 24, label, { fontSize: 7.5 });
-    drawCell(doc, 190, currentY, 55, 24, type, { fontSize: 7.5 });
-    drawCell(doc, 245, currentY, 45, 24, item.size || 'N/D', { fontSize: 8 });
-    drawCell(doc, 290, currentY, 80, 24, dorsal, { fontSize: 7.5 });
-    drawCell(doc, 370, currentY, 45, 24, String(item.quantity || 1), { fontSize: 9 });
-    drawCell(doc, 415, currentY, 52, 24, `${lineTotal.toFixed(2)}`, { fontSize: 8.5, align: 'right' });
-    drawCell(doc, 467, currentY, 53, 24, `${lineBs.toFixed(2)}`, { fontSize: 8.5, align: 'right' });
+
+    doc.fillColor(textStrong).fontSize(8.2).text(String(index + 1), 46, currentY + 7, { width: 14, align: 'center' });
+    doc.fillColor(textStrong).fontSize(7.2).text(label, 72, currentY + 7, { width: 118, align: 'left' });
+    doc.fillColor(textSoft).fontSize(7.2).text(type, 206, currentY + 7, { width: 42, align: 'left' });
+    doc.fillColor(textStrong).fontSize(7.5).text(item.size || 'N/D', 264, currentY + 7, { width: 30, align: 'center' });
+    doc.fillColor(textStrong).fontSize(7.2).text(dorsal, 308, currentY + 7, { width: 62, align: 'center' });
+    doc.fillColor(textStrong).fontSize(7.6).text(String(item.quantity || 1), 382, currentY + 7, { width: 24, align: 'center' });
+    doc.fillColor(textStrong).fontSize(7.8).text(`${lineTotal.toFixed(2)}`, 420, currentY + 7, { width: 46, align: 'right' });
+    doc.fillColor(textStrong).fontSize(7.8).text(`${lineBs.toFixed(2)}`, 474, currentY + 7, { width: 68, align: 'right' });
+
     currentY += 24;
     if (item.dorsal_name || item.custom_name || item.no_dorsal) {
       const customization = item.no_dorsal
         ? 'Sin dorsal'
-        : item.custom_name ? `Personalizada: ${item.custom_name} Dorsal # ${item.custom_number || ''}` : `Dorsal: ${item.dorsal_number} - ${item.dorsal_name}`;
-      drawCell(doc, 70, currentY, 450, 20, customization, { fontSize: 8, color: '#475569' });
-      currentY += 20;
+        : item.custom_name
+          ? `Personalizada: ${item.custom_name}${item.custom_number ? ` · #${item.custom_number}` : ''}`
+          : `Dorsal: ${item.dorsal_number || 'N/D'}${item.dorsal_name ? ` · ${item.dorsal_name}` : ''}`;
+      doc.roundedRect(72, currentY, 482, 18, 4).fill('#ffffff').strokeColor(borderColor).stroke();
+      doc.fillColor(textSoft).fontSize(7.2).text(customization, 78, currentY + 4, { width: 468 });
+      currentY += 18;
     }
   });
 
-  const totalsY = currentY + 10;
-  doc.roundedRect(320, totalsY, 200, 48, 6).fill('#e8f1ff');
-  doc.fillColor('#1e3a8a').fontSize(10).text('TOTAL USD', 330, totalsY + 7);
-  doc.fillColor('#0f2d52').fontSize(12).text(`${totalUsd.toFixed(2)}`, 440, totalsY + 6, { width: 70, align: 'right' });
-  doc.fillColor('#1e3a8a').fontSize(10).text('TOTAL BS', 330, totalsY + 30);
-  doc.fillColor('#0f2d52').fontSize(11).text(`${totalBs.toFixed(2)}`, 440, totalsY + 29, { width: 70, align: 'right' });
+  const totalsY = currentY + 12;
+  doc.roundedRect(338, totalsY, 216, 66, 12).fill('#eaf3ff').strokeColor(borderColor).stroke();
+  doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL USD', 356, totalsY + 12, { width: 90 });
+  doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL BS', 356, totalsY + 36, { width: 90 });
+  doc.fillColor(accentBlue).fontSize(17).text(`${totalUsd.toFixed(2)}`, 442, totalsY + 8, { width: 98, align: 'right' });
+  doc.fillColor(accentBlue).fontSize(17).text(`${totalBs.toFixed(2)}`, 442, totalsY + 32, { width: 98, align: 'right' });
 
-  const footerY = doc.page.height - 120;
-  doc.fontSize(9).fillColor('#6b7280').text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', 40, footerY - 36, { width: 515, align: 'center' });
-  doc.text('www.mdjsport.netlify.app.com', 40, footerY - 20, { width: 515, align: 'center' });
-  const currentPage = doc.bufferedPageRange().count - 1;
-  doc.switchToPage(currentPage);
-  drawInvoiceFooter(doc, logoImage);
+  const footerY = doc.page.height - 116;
+  doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
+  if (logoImage) {
+    doc.rect(40, footerY + 8, 72, 60).fill('#ffffff');
+    doc.image(logoImage, 44, footerY + 12, { fit: [64, 48], align: 'center', valign: 'center' });
+  }
+  doc.fillColor(textSoft).fontSize(8.5).text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 120, footerY + 20);
+  doc.fillColor(textSoft).fontSize(8.5).text('Teléfono: +58 0414-714-6602', 120, footerY + 34);
+  drawInstagramIcon(doc, 345, footerY + 20);
+  doc.fillColor('#2563eb').fontSize(8.5).text('@mdj_soccer', 366, footerY + 22);
+  drawWhatsappIcon(doc, 440, footerY + 19);
+  doc.fillColor('#16a34a').fontSize(8.5).text('+58 0414-714-6602', 462, footerY + 22);
+  doc.fillColor('#6b7280').fontSize(8.8).text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', 40, footerY + 54, { width: 515, align: 'center' });
 
   doc.end();
 
