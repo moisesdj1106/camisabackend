@@ -132,11 +132,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   doc.fillColor('#f4f8ff').rect(0, 0, doc.page.width, 700).fill();
   doc.roundedRect(38, 36, 516, 86, 18).fill(accentBlue);
-  if (logoImage) {
-    doc.image(logoImage, 58, 52, { fit: [72, 54], align: 'center', valign: 'center' });
-  }
-  doc.fillColor('#ffffff').fontSize(24).text('MDJ SOCCER', 145, 56);
-  doc.fillColor('#cfe4ff').fontSize(9).text('Camisetas deportivas · San Cristóbal', 145, 89);
+  doc.fillColor('#ffffff').fontSize(24).text('MDJ SOCCER', 58, 56);
+  doc.fillColor('#cfe4ff').fontSize(9).text('Camisetas deportivas · San Cristóbal', 58, 89);
 
   doc.roundedRect(394, 46, 140, 46, 10).fill('#1d4ed8');
   doc.fillColor('#ffffff').fontSize(8.5).text('FACTURA', 422, 56, { width: 90, align: 'center' });
@@ -168,8 +165,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   doc.fontSize(14).fillColor(accentBlue).text('Detalle de compra', 40, 356);
   const tableTop = 380;
+  doc.rect(40, tableTop, 514, 24).fill(accentBlue);
   const tableHeader = (x, width, text, align = 'left') => {
-    doc.roundedRect(x, tableTop, width, 24, 6).fill(accentBlue);
     doc.fillColor('#ffffff').fontSize(8.8).text(text, x + 8, tableTop + 7, { width: width - 12, align });
   };
   tableHeader(40, 26, 'Nº');
