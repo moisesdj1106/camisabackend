@@ -98,7 +98,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
     const invoicePath = path.join(uploadDir, `invoice-${result.order.id}.pdf`);
     fs.writeFileSync(invoicePath, invoiceBuffer);
     await updateOrderInvoice(result.order.id, invoicePath, `INV-${String(result.order.id).padStart(4, '0')}`);
-    res.status(201).json({ order: result.order, invoiceBuffer: invoiceBuffer.toString('base64') });
+    res.status(201).json({ order: result.order });
   });
 });
 
