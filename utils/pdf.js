@@ -224,9 +224,12 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     const initialPaymentLabel = firstPaymentCurrency === 'BS'
       ? `BS ${firstPaymentAmount.toFixed(2)} (USD ${firstPaymentUsd.toFixed(2)})`
       : `USD ${firstPaymentAmount.toFixed(2)}`;
-    doc.fillColor(accentBlue).fontSize(7.5).text(`TOTAL: USD ${totalUsd.toFixed(2)} · BS ${totalBs.toFixed(2)}`, 350, totalsY + 7, { width: 192 });
-    doc.fillColor(textStrong).fontSize(7.5).text(`ABONO INICIAL: ${initialPaymentLabel}`, 350, totalsY + 20, { width: 192 });
-    doc.fillColor(textStrong).fontSize(7.5).text(`SALDO: USD ${remainingUsd.toFixed(2)} · BS ${remainingBs.toFixed(2)}`, 350, totalsY + 33, { width: 192 });
+    doc.roundedRect(350, totalsY + 7, 3, 9, 1).fill(accentMid);
+    doc.fillColor(accentBlue).fontSize(7.5).text(`TOTAL: USD ${totalUsd.toFixed(2)} · BS ${totalBs.toFixed(2)}`, 358, totalsY + 7, { width: 184 });
+    doc.roundedRect(350, totalsY + 20, 3, 9, 1).fill('#16a34a');
+    doc.fillColor('#166534').fontSize(7.5).text(`ABONO INICIAL: ${initialPaymentLabel}`, 358, totalsY + 20, { width: 184 });
+    doc.roundedRect(350, totalsY + 33, 3, 9, 1).fill('#d97706');
+    doc.fillColor('#92400e').fontSize(7.5).text(`SALDO: USD ${remainingUsd.toFixed(2)} · BS ${remainingBs.toFixed(2)}`, 358, totalsY + 33, { width: 184 });
     doc.fillColor(paymentComplete ? '#126653' : '#9a5b08').fontSize(7.5).text(paymentComplete ? 'PAGO COMPLETADO · 2 COMPROBANTES' : 'PAGO PARCIAL · SALDO PENDIENTE', 350, totalsY + 48, { width: 192 });
   } else {
     doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL USD', 356, totalsY + 12, { width: 90 });
