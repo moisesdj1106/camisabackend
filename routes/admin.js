@@ -149,6 +149,20 @@ adminRouter.get('/orders', authMiddleware, adminOnly, async (req, res) => {
   res.json(ordersWithClient);
 });
 
+adminRouter.post('/orders/upload-proof', authMiddleware, adminOnly, (req, res) => {
+  req.app.locals.upload.single('file')(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudo procesar el comprobante.' });
+    if (!req.file) return res.status(400).json({ error: 'Selecciona una imagen de comprobante.' });
+    try {
+      const proofUrl = await saveAdminOrderProof(req.file);
+      res.status(201).json({ proof_url: proofUrl, storage: 'cloudinary' });
+    } catch (error) {
+      fs.unlink(req.file.path, () => {});
+      res.status(error.statusCode || 502).json({ error: error.message || 'No se pudo subir el comprobante a Cloudinary.' });
+    }
+  });
+});
+
 adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
   req.app.locals.upload.fields([
     { name: 'first_payment_proof', maxCount: 1 },
@@ -158,8 +172,8 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
     const uploadedFiles = Object.values(req.files || {}).flat();
     try {
       const { client, items, payment_method, payment_plan, delivery_method, shipping_details, status } = req.body || {};
-      const paymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]);
-      const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]);
+      const paymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]) || req.body.payment_proof_url || null;
+      const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]) || req.body.delivery_payment_proof_url || null;
       const order = await createOrderManually({
         adminUserId: req.user.id,
         clientData: client ? JSON.parse(client) : {},
@@ -211,7 +225,7 @@ adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
         ...req.body,
         shipping_details: shippingDetails,
         payment_proof_url: firstPaymentProofUrl || req.body.payment_proof_url,
-        delivery_payment_proof_url: deliveryPaymentProofUrl
+        delivery_payment_proof_url: deliveryPaymentProofUrl || req.body.delivery_payment_proof_url
       }, req.user.id);
       res.json(order);
     } catch (error) {
