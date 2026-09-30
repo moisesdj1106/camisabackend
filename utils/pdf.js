@@ -161,7 +161,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   drawSummaryCard(40, 252, 245, 90, 'Empresa', [
     'MDJ SOCCER',
-    'mdjsoccer@gmail.com',
+    'mdjsoccer26@gmail.com',
     '+58 0414-714-6602'
   ]);
 
@@ -228,8 +228,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     doc.roundedRect(350, totalsY + 20, 3, 9, 1).fill('#16a34a');
     doc.fillColor('#166534').fontSize(7.5).text(`ABONO INICIAL: ${initialPaymentLabel}`, 358, totalsY + 20, { width: 184 });
     doc.roundedRect(350, totalsY + 33, 3, 9, 1).fill('#d97706');
-    doc.fillColor('#92400e').fontSize(7.5).text(`SALDO: USD ${remainingUsd.toFixed(2)} · BS ${remainingBs.toFixed(2)}`, 358, totalsY + 33, { width: 184 });
-    doc.fillColor(paymentComplete ? '#126653' : '#9a5b08').fontSize(7.5).text(paymentComplete ? 'PAGO COMPLETADO · 2 COMPROBANTES' : 'PAGO PARCIAL · SALDO PENDIENTE', 350, totalsY + 48, { width: 192 });
+    doc.fillColor('#92400e').fontSize(7.5).text(`PENDIENTE: USD ${remainingUsd.toFixed(2)} · BS ${remainingBs.toFixed(2)}`, 358, totalsY + 33, { width: 184 });
+    doc.fillColor(paymentComplete ? '#126653' : '#9a5b08').fontSize(7.5).text(paymentComplete ? 'PAGO COMPLETADO · 2 COMPROBANTES' : 'PAGO PARCIAL', 350, totalsY + 48, { width: 192 });
   } else {
     doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL USD', 356, totalsY + 12, { width: 90 });
     doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL BS', 356, totalsY + 36, { width: 90 });
