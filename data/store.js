@@ -141,6 +141,8 @@ const mapOrder = (row) => (row ? {
   discount_percent: Number(row.discount_percent || 0),
   payment_method: row.payment_method,
   payment_plan: row.payment_plan || 'full',
+  first_payment_amount: Number(row.first_payment_amount || 0),
+  first_payment_currency: row.first_payment_currency || 'USD',
   payment_proof_url: row.payment_proof_url,
   delivery_payment_proof_url: row.delivery_payment_proof_url || null,
   delivery_method: row.delivery_method || 'personal',
@@ -357,6 +359,8 @@ export const initializeStore = async () => {
       discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
       payment_method VARCHAR(30) NOT NULL,
       payment_plan VARCHAR(20) NOT NULL DEFAULT 'full',
+      first_payment_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      first_payment_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
       payment_proof_url TEXT,
       delivery_payment_proof_url TEXT,
       delivery_method VARCHAR(20) NOT NULL DEFAULT 'personal',
@@ -373,6 +377,8 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_proof_url TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_plan VARCHAR(20) NOT NULL DEFAULT 'full';`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS first_payment_amount NUMERIC(12,2) NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS first_payment_currency VARCHAR(3) NOT NULL DEFAULT 'USD';`);
   await pool.query(`UPDATE orders SET payment_plan = 'installments' WHERE delivery_payment_proof_url IS NOT NULL AND payment_plan = 'full';`);
 
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal_amount DECIMAL(10,2);`);
@@ -665,7 +671,7 @@ export const deleteProduct = async (id) => {
   await pool.query('DELETE FROM products WHERE id = $1', [id]);
 };
 
-export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails }) => {
+export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails }) => {
   for (const item of items) {
     const product = await getProductById(Number(item.product_id));
     validateProductDorsalOption(product, item);
@@ -683,9 +689,22 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
   const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
   const totalAmount = subtotalAmount;
   const exchangeRate = await getExchangeRate();
+  const normalizedCurrency = String(firstPaymentCurrency || 'USD').toUpperCase();
+  const normalizedFirstPaymentAmount = paymentPlan === 'installments' ? Number(firstPaymentAmount) : 0;
+  if (paymentPlan === 'installments') {
+    if (!Number.isFinite(normalizedFirstPaymentAmount) || normalizedFirstPaymentAmount <= 0 || !['USD', 'BS'].includes(normalizedCurrency)) {
+      throw new Error('Indica un monto válido para el primer pago y su moneda.');
+    }
+    const paidUsd = normalizedCurrency === 'BS'
+      ? normalizedFirstPaymentAmount / Number(exchangeRate)
+      : normalizedFirstPaymentAmount;
+    if (!Number.isFinite(paidUsd) || paidUsd >= totalAmount) {
+      throw new Error('El primer abono debe ser menor que el total; si ya se pagó todo, selecciona pago completo.');
+    }
+  }
   const orderRes = await pool.query(
-    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
-    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
+    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9, $10, $11, $12, $13, $14) RETURNING *',
+    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
   for (const item of pricedItems) {
@@ -703,7 +722,7 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
   return { order, items: pricedItems };
 };
 
-export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentPlan = 'full', paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
+export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('Debes agregar al menos un producto al pedido.');
   }
@@ -712,6 +731,9 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
   }
   if (!['full', 'installments'].includes(paymentPlan)) {
     throw new Error('Selecciona pago completo o por partes.');
+  }
+  if (paymentPlan === 'installments' && (!Number.isFinite(Number(firstPaymentAmount)) || Number(firstPaymentAmount) <= 0 || !['USD', 'BS'].includes(String(firstPaymentCurrency).toUpperCase()))) {
+    throw new Error('Indica un monto válido para el primer pago y su moneda.');
   }
   if (!paymentProofUrl) {
     throw new Error('Adjunta el comprobante del pago inicial.');
@@ -768,6 +790,8 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
     items: finalItems,
     paymentMethod,
     paymentPlan,
+    firstPaymentAmount,
+    firstPaymentCurrency,
     paymentProofUrl,
     deliveryPaymentProofUrl: paymentPlan === 'installments' ? deliveryPaymentProofUrl : null,
     deliveryMethod,
@@ -781,7 +805,7 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
 
   await pool.query(
     'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
-    [adminUserId, 'CREATE_ORDER_MANUAL', 'orders', order.order.id, JSON.stringify({ client_id: user.id, status, payment_method: paymentMethod, delivery_method: deliveryMethod })]
+    [adminUserId, 'CREATE_ORDER_MANUAL', 'orders', order.order.id, JSON.stringify({ client_id: user.id, status, payment_method: paymentMethod, payment_plan: paymentPlan, first_payment_amount: firstPaymentAmount, first_payment_currency: firstPaymentCurrency, delivery_method: deliveryMethod })]
   );
 
   return { ...order, client: user };
@@ -977,6 +1001,24 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
     const existing = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
     if (!existing.rows[0]) throw new Error('Pedido no encontrado.');
     const currentOrder = existing.rows[0];
+    const firstPaymentCurrency = paymentPlan === 'installments'
+      ? String(payload.first_payment_currency || currentOrder.first_payment_currency || 'USD').toUpperCase()
+      : 'USD';
+    const paymentProofUrl = payload.payment_proof_url || currentOrder.payment_proof_url || null;
+    const firstPaymentAmount = paymentPlan === 'installments'
+      ? Number(payload.first_payment_amount !== undefined && payload.first_payment_amount !== '' ? payload.first_payment_amount : currentOrder.first_payment_amount || 0)
+      : 0;
+    if (paymentPlan === 'installments') {
+      if (!paymentProofUrl) throw new Error('Adjunta el comprobante del primer pago.');
+      if (!Number.isFinite(firstPaymentAmount) || firstPaymentAmount <= 0 || !['USD', 'BS'].includes(firstPaymentCurrency)) {
+        throw new Error('Indica un monto válido para el primer pago y su moneda.');
+      }
+      const rate = Number(currentOrder.exchange_rate || 0);
+      const paidUsd = firstPaymentCurrency === 'BS' ? firstPaymentAmount / rate : firstPaymentAmount;
+      if (!Number.isFinite(paidUsd) || paidUsd >= Number(currentOrder.total_amount)) {
+        throw new Error('El primer abono debe ser menor que el total; si ya se pagó todo, selecciona pago completo.');
+      }
+    }
     if (payload.payment_method === 'efectivo' && payload.delivery_method !== 'personal' && (payload.payment_method !== currentOrder.payment_method || payload.delivery_method !== currentOrder.delivery_method)) {
       throw new Error('El pago en efectivo solo está disponible para entrega personal.');
     }
@@ -990,10 +1032,11 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
       UPDATE orders
         SET payment_method = $1, payment_proof_url = $2, payment_plan = $3::varchar,
           delivery_payment_proof_url = CASE WHEN $3::varchar = 'installments' THEN COALESCE($4, delivery_payment_proof_url) ELSE NULL END,
-          delivery_method = $5, shipping_details = $6, status = $7
-      WHERE id = $8
+            first_payment_amount = $9::numeric, first_payment_currency = $10::varchar,
+            delivery_method = $5, shipping_details = $6, status = $7
+        WHERE id = $8
       RETURNING *
-    `, [payload.payment_method, payload.payment_proof_url || null, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId]);
+      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency]);
 
     if (payload.delivery_method === 'national') {
       await client.query(`
@@ -1005,7 +1048,7 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
       await client.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
     }
 
-    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DETAILS', 'orders', orderId, JSON.stringify({ payment_method: payload.payment_method, delivery_method: payload.delivery_method, status: payload.status })]);
+    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DETAILS', 'orders', orderId, JSON.stringify({ payment_method: payload.payment_method, payment_plan: paymentPlan, first_payment_amount: firstPaymentAmount, first_payment_currency: firstPaymentCurrency, delivery_method: payload.delivery_method, status: payload.status })]);
     await client.query('COMMIT');
     return mapOrder(updated.rows[0]);
   } catch (error) {

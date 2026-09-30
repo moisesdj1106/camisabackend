@@ -102,6 +102,13 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const totalUsd = Number(order.total_amount || 0);
   const totalBs = totalUsd * exchangeRate;
+  const isInstallmentOrder = order.payment_plan === 'installments';
+  const firstPaymentAmount = Number(order.first_payment_amount || 0);
+  const firstPaymentCurrency = order.first_payment_currency === 'BS' ? 'BS' : 'USD';
+  const firstPaymentUsd = firstPaymentCurrency === 'BS' ? firstPaymentAmount / exchangeRate : firstPaymentAmount;
+  const paymentComplete = Boolean(order.payment_proof_url && order.delivery_payment_proof_url);
+  const remainingUsd = paymentComplete ? 0 : Math.max(0, totalUsd - firstPaymentUsd);
+  const remainingBs = remainingUsd * exchangeRate;
   const invoiceNumber = order.invoice_number || `INV-${String(order.id).padStart(4, '0')}`;
 
   const accentBlue = '#0f2d52';
@@ -213,10 +220,20 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
 
   const totalsY = currentY + 12;
   doc.roundedRect(338, totalsY, 216, 66, 12).fill('#eaf3ff').strokeColor(borderColor).stroke();
-  doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL USD', 356, totalsY + 12, { width: 90 });
-  doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL BS', 356, totalsY + 36, { width: 90 });
-  doc.fillColor(accentBlue).fontSize(17).text(`${totalUsd.toFixed(2)}`, 442, totalsY + 8, { width: 98, align: 'right' });
-  doc.fillColor(accentBlue).fontSize(17).text(`${totalBs.toFixed(2)}`, 442, totalsY + 32, { width: 98, align: 'right' });
+  if (isInstallmentOrder) {
+    const initialPaymentLabel = firstPaymentCurrency === 'BS'
+      ? `BS ${firstPaymentAmount.toFixed(2)} (USD ${firstPaymentUsd.toFixed(2)})`
+      : `USD ${firstPaymentAmount.toFixed(2)}`;
+    doc.fillColor(accentBlue).fontSize(7.5).text(`TOTAL: USD ${totalUsd.toFixed(2)} · BS ${totalBs.toFixed(2)}`, 350, totalsY + 7, { width: 192 });
+    doc.fillColor(textStrong).fontSize(7.5).text(`ABONO INICIAL: ${initialPaymentLabel}`, 350, totalsY + 20, { width: 192 });
+    doc.fillColor(textStrong).fontSize(7.5).text(`SALDO: USD ${remainingUsd.toFixed(2)} · BS ${remainingBs.toFixed(2)}`, 350, totalsY + 33, { width: 192 });
+    doc.fillColor(paymentComplete ? '#126653' : '#9a5b08').fontSize(7.5).text(paymentComplete ? 'PAGO COMPLETADO · 2 COMPROBANTES' : 'PAGO PARCIAL · SALDO PENDIENTE', 350, totalsY + 48, { width: 192 });
+  } else {
+    doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL USD', 356, totalsY + 12, { width: 90 });
+    doc.fillColor(accentBlue).fontSize(8.7).text('TOTAL BS', 356, totalsY + 36, { width: 90 });
+    doc.fillColor(accentBlue).fontSize(17).text(`${totalUsd.toFixed(2)}`, 442, totalsY + 8, { width: 98, align: 'right' });
+    doc.fillColor(accentBlue).fontSize(17).text(`${totalBs.toFixed(2)}`, 442, totalsY + 32, { width: 98, align: 'right' });
+  }
 
   const footerY = doc.page.height - 116;
   doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor('#dbe5f1').stroke();
@@ -230,7 +247,10 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.fillColor('#2563eb').fontSize(8.5).text('@mdj_soccer', 366, footerY + 22);
   drawWhatsappIcon(doc, 440, footerY + 19);
   doc.fillColor('#16a34a').fontSize(8.5).text('+58 0414-714-6602', 462, footerY + 22);
-  doc.fillColor('#6b7280').fontSize(8.8).text('Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.', 40, footerY + 54, { width: 515, align: 'center' });
+  const invoiceNote = isInstallmentOrder
+    ? 'Factura con abono y saldo calculados según la tasa registrada en el pedido.'
+    : 'Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.';
+  doc.fillColor('#6b7280').fontSize(8.8).text(invoiceNote, 40, footerY + 54, { width: 515, align: 'center' });
 
   doc.end();
 

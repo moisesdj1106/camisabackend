@@ -177,7 +177,7 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
     if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudieron procesar los comprobantes.' });
     const uploadedFiles = Object.values(req.files || {}).flat();
     try {
-      const { client, items, payment_method, payment_plan, delivery_method, shipping_details, status } = req.body || {};
+      const { client, items, payment_method, payment_plan, first_payment_amount, first_payment_currency, delivery_method, shipping_details, status } = req.body || {};
       const paymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]) || req.body.payment_proof_url || null;
       const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]) || req.body.delivery_payment_proof_url || null;
       const order = await createOrderManually({
@@ -186,6 +186,8 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
         items: parseRequestValue(items, []),
         paymentMethod: payment_method,
         paymentPlan: payment_plan,
+        firstPaymentAmount: Number(first_payment_amount || 0),
+        firstPaymentCurrency: first_payment_currency || 'USD',
         paymentProofUrl,
         deliveryPaymentProofUrl,
         deliveryMethod: delivery_method || 'personal',
