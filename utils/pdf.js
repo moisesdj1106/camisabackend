@@ -221,9 +221,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   const totalsY = currentY + 12;
   doc.roundedRect(338, totalsY, 216, 66, 12).fill('#eaf3ff').strokeColor(borderColor).stroke();
   if (isInstallmentOrder) {
-    const initialPaymentLabel = firstPaymentCurrency === 'BS'
-      ? `BS ${firstPaymentAmount.toFixed(2)} (USD ${firstPaymentUsd.toFixed(2)})`
-      : `USD ${firstPaymentAmount.toFixed(2)}`;
+    const initialPaymentBs = firstPaymentCurrency === 'BS' ? firstPaymentAmount : firstPaymentUsd * exchangeRate;
+    const initialPaymentLabel = `USD ${firstPaymentUsd.toFixed(2)} · BS ${initialPaymentBs.toFixed(2)}`;
     doc.roundedRect(350, totalsY + 7, 3, 9, 1).fill(accentMid);
     doc.fillColor(accentBlue).fontSize(7.5).text(`TOTAL: USD ${totalUsd.toFixed(2)} · BS ${totalBs.toFixed(2)}`, 358, totalsY + 7, { width: 184 });
     doc.roundedRect(350, totalsY + 20, 3, 9, 1).fill('#16a34a');
