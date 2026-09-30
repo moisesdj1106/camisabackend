@@ -348,14 +348,6 @@ export const initializeStore = async () => {
     );
   `);
 
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(20) DEFAULT 'personal';`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_proof_url TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_plan VARCHAR(20) NOT NULL DEFAULT 'full';`);
-  await pool.query(`UPDATE orders SET payment_plan = 'installments' WHERE delivery_payment_proof_url IS NOT NULL AND payment_plan = 'full';`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
@@ -364,11 +356,24 @@ export const initializeStore = async () => {
       total_amount DECIMAL(10,2) NOT NULL,
       discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
       payment_method VARCHAR(30) NOT NULL,
+      payment_plan VARCHAR(20) NOT NULL DEFAULT 'full',
       payment_proof_url TEXT,
+      delivery_payment_proof_url TEXT,
+      delivery_method VARCHAR(20) NOT NULL DEFAULT 'personal',
+      shipping_details JSONB,
       status VARCHAR(20) NOT NULL DEFAULT 'pending',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(20) DEFAULT 'personal';`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_proof_url TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_plan VARCHAR(20) NOT NULL DEFAULT 'full';`);
+  await pool.query(`UPDATE orders SET payment_plan = 'installments' WHERE delivery_payment_proof_url IS NOT NULL AND payment_plan = 'full';`);
 
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal_amount DECIMAL(10,2);`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0;`);
@@ -983,8 +988,8 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
 
     const updated = await client.query(`
       UPDATE orders
-      SET payment_method = $1, payment_proof_url = $2, payment_plan = $3,
-          delivery_payment_proof_url = CASE WHEN $3 = 'installments' THEN COALESCE($4, delivery_payment_proof_url) ELSE NULL END,
+        SET payment_method = $1, payment_proof_url = $2, payment_plan = $3::varchar,
+          delivery_payment_proof_url = CASE WHEN $3::varchar = 'installments' THEN COALESCE($4, delivery_payment_proof_url) ELSE NULL END,
           delivery_method = $5, shipping_details = $6, status = $7
       WHERE id = $8
       RETURNING *
