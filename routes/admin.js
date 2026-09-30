@@ -33,6 +33,12 @@ const saveAdminOrderProof = async (file) => {
   }
 };
 
+const parseRequestValue = (value, fallback = null) => {
+  if (typeof value !== 'string') return value ?? fallback;
+  if (!value) return fallback;
+  return JSON.parse(value);
+};
+
 adminRouter.put('/products/discounts', authMiddleware, adminOnly, async (req, res) => {
   const discount = Number(req.body?.discount_percent);
   if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
@@ -176,20 +182,21 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
       const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]) || req.body.delivery_payment_proof_url || null;
       const order = await createOrderManually({
         adminUserId: req.user.id,
-        clientData: client ? JSON.parse(client) : {},
-        items: Array.isArray(items) ? items : JSON.parse(items || '[]'),
+        clientData: parseRequestValue(client, {}),
+        items: parseRequestValue(items, []),
         paymentMethod: payment_method,
         paymentPlan: payment_plan,
         paymentProofUrl,
         deliveryPaymentProofUrl,
         deliveryMethod: delivery_method || 'personal',
-        shippingDetails: shipping_details ? JSON.parse(shipping_details) : null,
+        shippingDetails: parseRequestValue(shipping_details),
         status: status || 'pending'
       });
       res.status(201).json(order);
     } catch (error) {
       uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
-      res.status(error.statusCode || 400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
+      console.error(`Error creando pedido manual: ${error.message}`, error.code || '');
+      res.status(error.statusCode || (error.code ? 500 : 400)).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
     }
   });
 });
@@ -220,7 +227,7 @@ adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
     try {
       const firstPaymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]);
       const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]);
-      const shippingDetails = req.body.shipping_details ? JSON.parse(req.body.shipping_details) : null;
+      const shippingDetails = parseRequestValue(req.body.shipping_details);
       const order = await updateOrderAdmin(Number(req.params.id), {
         ...req.body,
         shipping_details: shippingDetails,
@@ -230,7 +237,8 @@ adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
       res.json(order);
     } catch (error) {
       uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
-      res.status(error.statusCode || 400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
+      console.error(`Error actualizando pedido ${req.params.id}: ${error.message}`, error.code || '');
+      res.status(error.statusCode || (error.code ? 500 : 400)).json({ error: error.message || 'No se pudo actualizar el pedido.' });
     }
   });
 });
