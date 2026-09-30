@@ -137,7 +137,7 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
     if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudieron procesar los comprobantes.' });
     const uploadedFiles = Object.values(req.files || {}).flat();
     try {
-      const { client, items, payment_method, delivery_method, shipping_details, status } = req.body || {};
+      const { client, items, payment_method, payment_plan, delivery_method, shipping_details, status } = req.body || {};
       const saveProof = async (file) => {
         if (!file) return null;
         const cloudinaryUrl = await uploadProof(file.path);
@@ -154,6 +154,7 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
         clientData: client ? JSON.parse(client) : {},
         items: Array.isArray(items) ? items : JSON.parse(items || '[]'),
         paymentMethod: payment_method,
+        paymentPlan: payment_plan,
         paymentProofUrl,
         deliveryPaymentProofUrl,
         deliveryMethod: delivery_method || 'personal',
@@ -184,13 +185,38 @@ adminRouter.put('/orders/:id/discount', authMiddleware, adminOnly, async (req, r
   res.json(order);
 });
 
-adminRouter.put('/orders/:id', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const order = await updateOrderAdmin(Number(req.params.id), req.body || {}, req.user.id);
-    res.json(order);
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
-  }
+adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
+  req.app.locals.upload.fields([
+    { name: 'first_payment_proof', maxCount: 1 },
+    { name: 'delivery_payment_proof', maxCount: 1 }
+  ])(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudieron procesar los comprobantes.' });
+    const uploadedFiles = Object.values(req.files || {}).flat();
+    try {
+      const saveProof = async (file) => {
+        if (!file) return null;
+        const cloudinaryUrl = await uploadProof(file.path);
+        if (cloudinaryUrl) {
+          fs.unlink(file.path, () => {});
+          return cloudinaryUrl;
+        }
+        return `/uploads/${file.filename}`;
+      };
+      const firstPaymentProofUrl = await saveProof(req.files?.first_payment_proof?.[0]);
+      const deliveryPaymentProofUrl = await saveProof(req.files?.delivery_payment_proof?.[0]);
+      const shippingDetails = req.body.shipping_details ? JSON.parse(req.body.shipping_details) : null;
+      const order = await updateOrderAdmin(Number(req.params.id), {
+        ...req.body,
+        shipping_details: shippingDetails,
+        payment_proof_url: firstPaymentProofUrl || req.body.payment_proof_url,
+        delivery_payment_proof_url: deliveryPaymentProofUrl
+      }, req.user.id);
+      res.json(order);
+    } catch (error) {
+      uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
+      res.status(400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
+    }
+  });
 });
 
 adminRouter.post('/orders/:id/items', authMiddleware, adminOnly, async (req, res) => {
