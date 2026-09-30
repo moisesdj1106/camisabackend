@@ -6,12 +6,32 @@ import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStor
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
-import { uploadProductImage, uploadProof, uploadStoreContent } from '../utils/cloudinary.js';
+import { isCloudinaryConfigured, uploadProductImage, uploadProof, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const adminRouter = express.Router();
+
+const saveAdminOrderProof = async (file) => {
+  if (!file) return null;
+  if (!isCloudinaryConfigured) {
+    const error = new Error('Cloudinary no está configurado en el backend. Revisa sus variables de entorno.');
+    error.statusCode = 503;
+    throw error;
+  }
+  try {
+    const cloudinaryUrl = await uploadProof(file.path);
+    if (!cloudinaryUrl) throw new Error('Cloudinary no devolvió una URL para el comprobante.');
+    fs.unlink(file.path, () => {});
+    return cloudinaryUrl;
+  } catch (uploadError) {
+    console.error('Error subiendo comprobante administrativo a Cloudinary:', uploadError.message);
+    const error = new Error('Cloudinary no pudo guardar el comprobante. Verifica sus credenciales e inténtalo otra vez.');
+    error.statusCode = 502;
+    throw error;
+  }
+};
 
 adminRouter.put('/products/discounts', authMiddleware, adminOnly, async (req, res) => {
   const discount = Number(req.body?.discount_percent);
@@ -138,17 +158,8 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
     const uploadedFiles = Object.values(req.files || {}).flat();
     try {
       const { client, items, payment_method, payment_plan, delivery_method, shipping_details, status } = req.body || {};
-      const saveProof = async (file) => {
-        if (!file) return null;
-        const cloudinaryUrl = await uploadProof(file.path);
-        if (cloudinaryUrl) {
-          fs.unlink(file.path, () => {});
-          return cloudinaryUrl;
-        }
-        return `/uploads/${file.filename}`;
-      };
-      const paymentProofUrl = await saveProof(req.files?.first_payment_proof?.[0]);
-      const deliveryPaymentProofUrl = await saveProof(req.files?.delivery_payment_proof?.[0]);
+      const paymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]);
+      const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]);
       const order = await createOrderManually({
         adminUserId: req.user.id,
         clientData: client ? JSON.parse(client) : {},
@@ -164,7 +175,7 @@ adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
       res.status(201).json(order);
     } catch (error) {
       uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
-      res.status(400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
+      res.status(error.statusCode || 400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
     }
   });
 });
@@ -193,17 +204,8 @@ adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
     if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudieron procesar los comprobantes.' });
     const uploadedFiles = Object.values(req.files || {}).flat();
     try {
-      const saveProof = async (file) => {
-        if (!file) return null;
-        const cloudinaryUrl = await uploadProof(file.path);
-        if (cloudinaryUrl) {
-          fs.unlink(file.path, () => {});
-          return cloudinaryUrl;
-        }
-        return `/uploads/${file.filename}`;
-      };
-      const firstPaymentProofUrl = await saveProof(req.files?.first_payment_proof?.[0]);
-      const deliveryPaymentProofUrl = await saveProof(req.files?.delivery_payment_proof?.[0]);
+      const firstPaymentProofUrl = await saveAdminOrderProof(req.files?.first_payment_proof?.[0]);
+      const deliveryPaymentProofUrl = await saveAdminOrderProof(req.files?.delivery_payment_proof?.[0]);
       const shippingDetails = req.body.shipping_details ? JSON.parse(req.body.shipping_details) : null;
       const order = await updateOrderAdmin(Number(req.params.id), {
         ...req.body,
@@ -214,7 +216,7 @@ adminRouter.put('/orders/:id', authMiddleware, adminOnly, (req, res) => {
       res.json(order);
     } catch (error) {
       uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
-      res.status(400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
+      res.status(error.statusCode || 400).json({ error: error.message || 'No se pudo actualizar el pedido.' });
     }
   });
 });

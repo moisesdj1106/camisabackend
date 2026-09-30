@@ -966,18 +966,18 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
   if (!allowedPaymentMethods.has(payload.payment_method) || !['full', 'installments'].includes(paymentPlan) || !allowedDeliveryMethods.has(payload.delivery_method)) {
     throw new Error('Método de pago o entrega inválido.');
   }
-  if (payload.payment_method === 'efectivo' && payload.delivery_method !== 'personal') {
-    throw new Error('El pago en efectivo solo está disponible para entrega personal.');
-  }
-  if (payload.delivery_method === 'national' && (!payload.shipping_details?.name || !payload.shipping_details?.phone || !payload.shipping_details?.cedula || !payload.shipping_details?.agency || !payload.shipping_details?.city || !payload.shipping_details?.state)) {
-    throw new Error('Completa todos los datos del envío nacional.');
-  }
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const existing = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
     if (!existing.rows[0]) throw new Error('Pedido no encontrado.');
+    const currentOrder = existing.rows[0];
+    if (payload.payment_method === 'efectivo' && payload.delivery_method !== 'personal' && (payload.payment_method !== currentOrder.payment_method || payload.delivery_method !== currentOrder.delivery_method)) {
+      throw new Error('El pago en efectivo solo está disponible para entrega personal.');
+    }
+    if (payload.delivery_method === 'national' && (!payload.shipping_details?.name || !payload.shipping_details?.phone || !payload.shipping_details?.cedula || !payload.shipping_details?.agency || !payload.shipping_details?.city || !payload.shipping_details?.state) && payload.delivery_method !== currentOrder.delivery_method) {
+      throw new Error('Completa todos los datos del envío nacional.');
+    }
     const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
     if (!allowedStatuses.has(payload.status)) throw new Error('Estado de pedido inválido.');
 
