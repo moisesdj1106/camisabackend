@@ -141,6 +141,7 @@ const mapOrder = (row) => (row ? {
   discount_percent: Number(row.discount_percent || 0),
   payment_method: row.payment_method,
   payment_proof_url: row.payment_proof_url,
+  delivery_payment_proof_url: row.delivery_payment_proof_url || null,
   delivery_method: row.delivery_method || 'personal',
   shipping_details: row.shipping_details || null,
   status: row.status,
@@ -351,6 +352,7 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(20) DEFAULT 'personal';`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_details JSONB;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_proof_url TEXT;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
@@ -655,7 +657,7 @@ export const deleteProduct = async (id) => {
   await pool.query('DELETE FROM products WHERE id = $1', [id]);
 };
 
-export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails }) => {
+export const createOrder = async ({ userId, items, paymentMethod, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails }) => {
   for (const item of items) {
     const product = await getProductById(Number(item.product_id));
     validateProductDorsalOption(product, item);
@@ -674,8 +676,8 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
   const totalAmount = subtotalAmount;
   const exchangeRate = await getExchangeRate();
   const orderRes = await pool.query(
-    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
-    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
+    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *',
+    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
   for (const item of pricedItems) {
@@ -693,11 +695,11 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentProofUr
   return { order, items: pricedItems };
 };
 
-export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
+export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('Debes agregar al menos un producto al pedido.');
   }
-  if (!['whatsapp', 'pago_movil', 'efectivo'].includes(paymentMethod)) {
+  if (!['whatsapp', 'pago_movil', 'efectivo', 'binance'].includes(paymentMethod)) {
     throw new Error('Debes seleccionar un método de pago válido.');
   }
   if (!['personal', 'national'].includes(deliveryMethod)) {
@@ -752,6 +754,7 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
     items: finalItems,
     paymentMethod,
     paymentProofUrl,
+    deliveryPaymentProofUrl,
     deliveryMethod,
     shippingDetails
   });
@@ -947,7 +950,7 @@ export const updateOrderDiscount = async (orderId, discountPercent, userId) => {
 };
 
 export const updateOrderAdmin = async (orderId, payload, userId) => {
-  const allowedPaymentMethods = new Set(['whatsapp', 'pago_movil', 'efectivo']);
+  const allowedPaymentMethods = new Set(['whatsapp', 'pago_movil', 'efectivo', 'binance']);
   const allowedDeliveryMethods = new Set(['personal', 'national']);
   if (!allowedPaymentMethods.has(payload.payment_method) || !allowedDeliveryMethods.has(payload.delivery_method)) {
     throw new Error('Método de pago o entrega inválido.');
@@ -1021,6 +1024,17 @@ export const getOrdersForUser = async (userId) => {
 
 export const getOrdersAdmin = async () => {
   const result = await pool.query('SELECT * FROM orders ORDER BY id DESC');
+  return result.rows.map(mapOrder);
+};
+
+export const getApprovedOrdersByDateRange = async (from, to) => {
+  const result = await pool.query(`
+    SELECT * FROM orders
+    WHERE status = 'approved'
+      AND created_at >= $1::date
+      AND created_at < ($2::date + INTERVAL '1 day')
+    ORDER BY id DESC
+  `, [from, to]);
   return result.rows.map(mapOrder);
 };
 

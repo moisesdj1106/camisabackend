@@ -19,7 +19,8 @@ const findLogoPath = () => {
 const paymentMethodLabels = {
   whatsapp: 'WhatsApp',
   pago_movil: 'Pago Móvil',
-  efectivo: 'Efectivo'
+  efectivo: 'Efectivo',
+  binance: 'Binance'
 };
 
 const orderStatusLabels = {
@@ -133,8 +134,8 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   doc.fillColor('#f4f8ff').rect(0, 0, doc.page.width, 700).fill();
   doc.roundedRect(38, 36, 516, 86, 18).fill(accentBlue);
   doc.fillColor('#ffffff').fontSize(24).text('MDJ SOCCER', 58, 56);
-  doc.fillColor('#cfe4ff').fontSize(9).text('Camisetas deportivas · San Cristóbal', 58, 89);
 
+  
   doc.roundedRect(394, 46, 140, 46, 10).fill('#1d4ed8');
   doc.fillColor('#ffffff').fontSize(8.5).text('FACTURA', 422, 56, { width: 90, align: 'center' });
   doc.fillColor('#dbeafe').fontSize(11).text(invoiceNumber, 422, 70, { width: 90, align: 'center' });
@@ -238,7 +239,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   });
 };
 
-export const createApprovedOrdersPdf = async (orders) => {
+export const createApprovedOrdersPdf = async (orders, dateRange = null) => {
   const doc = new PDFDocument({ size: 'A4', margin: 36, bottomMargin: 70, bufferPages: true });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
@@ -270,7 +271,8 @@ export const createApprovedOrdersPdf = async (orders) => {
     doc.y = headerY;
     doc.roundedRect(contentX, headerY, contentWidth, 52, 10).fill('#0f2d52');
     doc.fillColor('#ffffff').fontSize(17).text('PEDIDOS ACEPTADOS', contentX + 18, headerY + 11);
-    doc.fillColor('#cfe4ff').fontSize(8).text('Control de camisetas para preparación', contentX + 18, headerY + 32);
+    const rangeLabel = dateRange ? ` · ${dateRange.from} al ${dateRange.to}` : '';
+    doc.fillColor('#cfe4ff').fontSize(8).text(`Control de camisetas para preparación${rangeLabel}`, contentX + 18, headerY + 32, { width: 250 });
     doc.fillColor('#dbeafe').fontSize(8).text(`${normalizedOrders.length} pedido(s) · ${totalItems} camiseta(s) · ${new Date().toLocaleDateString('es-VE')}`, contentX + 285, headerY + 32, { width: 220, align: 'right' });
     doc.y = headerY + 52;
   };

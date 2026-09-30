@@ -2,11 +2,11 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
-import { uploadProductImage, uploadStoreContent } from '../utils/cloudinary.js';
+import { uploadProductImage, uploadProof, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -129,23 +129,43 @@ adminRouter.get('/orders', authMiddleware, adminOnly, async (req, res) => {
   res.json(ordersWithClient);
 });
 
-adminRouter.post('/orders/manual', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { client, items, payment_method, payment_proof_url, delivery_method, shipping_details, status } = req.body || {};
-    const order = await createOrderManually({
-      adminUserId: req.user.id,
-      clientData: client || {},
-      items: Array.isArray(items) ? items : [],
-      paymentMethod: payment_method,
-      paymentProofUrl: payment_proof_url || null,
-      deliveryMethod: delivery_method || 'personal',
-      shippingDetails: shipping_details || null,
-      status: status || 'pending'
-    });
-    res.status(201).json(order);
-  } catch (error) {
-    res.status(400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
-  }
+adminRouter.post('/orders/manual', authMiddleware, adminOnly, (req, res) => {
+  req.app.locals.upload.fields([
+    { name: 'first_payment_proof', maxCount: 1 },
+    { name: 'delivery_payment_proof', maxCount: 1 }
+  ])(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudieron procesar los comprobantes.' });
+    const uploadedFiles = Object.values(req.files || {}).flat();
+    try {
+      const { client, items, payment_method, delivery_method, shipping_details, status } = req.body || {};
+      const saveProof = async (file) => {
+        if (!file) return null;
+        const cloudinaryUrl = await uploadProof(file.path);
+        if (cloudinaryUrl) {
+          fs.unlink(file.path, () => {});
+          return cloudinaryUrl;
+        }
+        return `/uploads/${file.filename}`;
+      };
+      const paymentProofUrl = await saveProof(req.files?.first_payment_proof?.[0]);
+      const deliveryPaymentProofUrl = await saveProof(req.files?.delivery_payment_proof?.[0]);
+      const order = await createOrderManually({
+        adminUserId: req.user.id,
+        clientData: client ? JSON.parse(client) : {},
+        items: Array.isArray(items) ? items : JSON.parse(items || '[]'),
+        paymentMethod: payment_method,
+        paymentProofUrl,
+        deliveryPaymentProofUrl,
+        deliveryMethod: delivery_method || 'personal',
+        shippingDetails: shipping_details ? JSON.parse(shipping_details) : null,
+        status: status || 'pending'
+      });
+      res.status(201).json(order);
+    } catch (error) {
+      uploadedFiles.forEach((file) => fs.unlink(file.path, () => {}));
+      res.status(400).json({ error: error.message || 'No se pudo crear el pedido manualmente.' });
+    }
+  });
 });
 
 adminRouter.put('/orders/:id/status', authMiddleware, adminOnly, async (req, res) => {
@@ -273,13 +293,23 @@ adminRouter.get('/clubs', authMiddleware, adminOnly, async (req, res) => {
 });
 
 adminRouter.get('/orders/approved/pdf', authMiddleware, adminOnly, async (req, res) => {
-  const approvedOrders = (await getOrdersAdmin()).filter((order) => order.status === 'approved');
+  const { from, to } = req.query;
+  const isValidDate = (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  if (!isValidDate(from) || !isValidDate(to) || from > to || to > today) {
+    return res.status(400).json({ error: 'Indica un rango válido, con inicio anterior al fin y sin fechas futuras.' });
+  }
+  const approvedOrders = await getApprovedOrdersByDateRange(from, to);
   const orders = await Promise.all(approvedOrders.map(async (order) => {
     const { getOrderDetailById } = await import('../data/store.js');
     const detail = await getOrderDetailById(order.id, null, true);
     return detail;
   }));
-  const pdfBuffer = await createApprovedOrdersPdf(orders.filter(Boolean));
+  const pdfBuffer = await createApprovedOrdersPdf(orders.filter(Boolean), { from, to });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="pedidos-aceptados.pdf"');
   res.send(pdfBuffer);
