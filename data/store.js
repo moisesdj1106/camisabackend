@@ -748,7 +748,7 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
     throw new Error('Indica el monto del pago final junto con su comprobante.');
   }
   if (!paymentProofUrl) {
-    throw new Error('Adjunta el comprobante del pago inicial.');
+    throw new Error('Adjunta el comprobante del primer pago.');
   }
   if (!['personal', 'national'].includes(deliveryMethod)) {
     throw new Error('Debes seleccionar una modalidad de entrega válida.');
