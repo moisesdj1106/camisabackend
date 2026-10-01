@@ -1379,10 +1379,7 @@ export const getDashboardStats = async () => {
   const paymentLedgerRes = await pool.query(`
     WITH active_orders AS (
       SELECT
-        CASE
-          WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
-          ELSE 'USD'
-        END AS currency,
+        REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' AS method_is_bs,
         total_amount::numeric AS total_usd,
         CASE WHEN COALESCE(exchange_rate, 0) > 0 THEN exchange_rate ELSE $1::numeric END AS rate,
         payment_plan,
@@ -1403,13 +1400,13 @@ export const getDashboardStats = async () => {
         CASE
           WHEN is_confirmed AND payment_plan = 'full' THEN
             CASE WHEN full_payment_amount > 0
-              THEN CASE WHEN currency = 'BS' THEN full_payment_amount / rate ELSE full_payment_amount END
+              THEN CASE WHEN method_is_bs THEN full_payment_amount / rate ELSE full_payment_amount END
               ELSE total_usd
             END
           WHEN is_confirmed AND payment_plan = 'installments' THEN
             CASE
               WHEN delivery_payment_amount > 0 THEN
-                CASE WHEN currency = 'BS' THEN delivery_payment_amount / rate ELSE delivery_payment_amount END
+                CASE WHEN method_is_bs THEN delivery_payment_amount / rate ELSE delivery_payment_amount END
               WHEN delivery_payment_proof_url IS NOT NULL THEN
                 GREATEST(0, total_usd - CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / rate ELSE first_payment_amount END)
               ELSE 0
@@ -1417,23 +1414,27 @@ export const getDashboardStats = async () => {
           ELSE 0
         END AS other_usd
       FROM active_orders
+    ), bounded_first_payments AS (
+      SELECT *,
+        LEAST(total_usd, GREATEST(0, first_usd)) AS capped_first_usd
+      FROM payments_usd
     ), bounded_payments AS (
       SELECT *,
-        LEAST(total_usd, GREATEST(0, first_usd)) AS capped_first_usd,
-        LEAST(total_usd, LEAST(total_usd, GREATEST(0, first_usd)) + GREATEST(0, other_usd)) AS received_usd
-      FROM payments_usd
+        LEAST(GREATEST(0, total_usd - capped_first_usd), GREATEST(0, other_usd)) AS capped_other_usd,
+        capped_first_usd + LEAST(GREATEST(0, total_usd - capped_first_usd), GREATEST(0, other_usd)) AS received_usd
+      FROM bounded_first_payments
     )
     SELECT
-      COALESCE(SUM(CASE WHEN currency = 'USD' THEN total_usd ELSE 0 END), 0) AS usd_expected,
-      COALESCE(SUM(CASE WHEN currency = 'BS' THEN total_usd * rate ELSE 0 END), 0) AS bs_expected,
-      COALESCE(SUM(CASE WHEN currency = 'USD' THEN LEAST(received_usd, capped_first_usd) ELSE 0 END), 0) AS first_received_usd,
-      COALESCE(SUM(CASE WHEN currency = 'BS' THEN LEAST(received_usd, capped_first_usd) * rate ELSE 0 END), 0) AS first_received_bs,
-      COALESCE(SUM(CASE WHEN currency = 'USD' THEN GREATEST(0, received_usd - LEAST(received_usd, capped_first_usd)) ELSE 0 END), 0) AS other_received_usd,
-      COALESCE(SUM(CASE WHEN currency = 'BS' THEN GREATEST(0, received_usd - LEAST(received_usd, capped_first_usd)) * rate ELSE 0 END), 0) AS other_received_bs,
-      COALESCE(SUM(CASE WHEN currency = 'USD' THEN received_usd ELSE 0 END), 0) AS usd_received,
-      COALESCE(SUM(CASE WHEN currency = 'BS' THEN received_usd * rate ELSE 0 END), 0) AS bs_received,
-      COALESCE(SUM(CASE WHEN currency = 'USD' THEN GREATEST(0, total_usd - received_usd) ELSE 0 END), 0) AS usd_pending,
-      COALESCE(SUM(CASE WHEN currency = 'BS' THEN GREATEST(0, total_usd - received_usd) * rate ELSE 0 END), 0) AS bs_pending
+      COALESCE(SUM(total_usd), 0) AS usd_expected,
+      COALESCE(SUM(total_usd * rate), 0) AS bs_expected,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'USD' THEN capped_first_usd ELSE 0 END), 0) AS first_received_usd,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * rate ELSE 0 END), 0) AS first_received_bs,
+      COALESCE(SUM(CASE WHEN NOT method_is_bs THEN capped_other_usd ELSE 0 END), 0) AS other_received_usd,
+      COALESCE(SUM(CASE WHEN method_is_bs THEN capped_other_usd * rate ELSE 0 END), 0) AS other_received_bs,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'USD' THEN capped_first_usd ELSE 0 END + CASE WHEN NOT method_is_bs THEN capped_other_usd ELSE 0 END), 0) AS usd_received,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * rate ELSE 0 END + CASE WHEN method_is_bs THEN capped_other_usd * rate ELSE 0 END), 0) AS bs_received,
+      COALESCE(SUM(GREATEST(0, total_usd - received_usd)), 0) AS usd_pending,
+      COALESCE(SUM(GREATEST(0, total_usd - received_usd) * rate), 0) AS bs_pending
     FROM bounded_payments
   `, [exchangeRate]);
   const ledgerRow = paymentLedgerRes.rows[0] || {};
