@@ -1375,6 +1375,83 @@ export const getDashboardStats = async () => {
     LIMIT 4
   `, metricsParams);
   const exchangeRate = await getExchangeRate();
+  const paymentLedgerRes = await pool.query(`
+    WITH active_orders AS (
+      SELECT
+        CASE
+          WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
+          ELSE 'USD'
+        END AS currency,
+        total_amount::numeric AS total_usd,
+        CASE WHEN COALESCE(exchange_rate, 0) > 0 THEN exchange_rate ELSE $1::numeric END AS rate,
+        payment_plan,
+        first_payment_amount::numeric AS first_payment_amount,
+        first_payment_currency,
+        full_payment_amount::numeric AS full_payment_amount,
+        delivery_payment_amount::numeric AS delivery_payment_amount,
+        delivery_payment_proof_url,
+        status IN ('approved', 'preparing', 'ready_pickup', 'shipped', 'delivered') AS is_confirmed
+      FROM orders
+      WHERE status NOT IN ('rejected', 'cancelled')
+    ), payments_usd AS (
+      SELECT *,
+        CASE WHEN is_confirmed AND payment_plan = 'installments'
+          THEN CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / rate ELSE first_payment_amount END
+          ELSE 0
+        END AS first_usd,
+        CASE
+          WHEN is_confirmed AND payment_plan = 'full' THEN
+            CASE WHEN full_payment_amount > 0
+              THEN CASE WHEN currency = 'BS' THEN full_payment_amount / rate ELSE full_payment_amount END
+              ELSE total_usd
+            END
+          WHEN is_confirmed AND payment_plan = 'installments' THEN
+            CASE
+              WHEN delivery_payment_amount > 0 THEN
+                CASE WHEN currency = 'BS' THEN delivery_payment_amount / rate ELSE delivery_payment_amount END
+              WHEN delivery_payment_proof_url IS NOT NULL THEN
+                GREATEST(0, total_usd - CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / rate ELSE first_payment_amount END)
+              ELSE 0
+            END
+          ELSE 0
+        END AS other_usd
+      FROM active_orders
+    ), bounded_payments AS (
+      SELECT *,
+        LEAST(total_usd, GREATEST(0, first_usd)) AS capped_first_usd,
+        LEAST(total_usd, LEAST(total_usd, GREATEST(0, first_usd)) + GREATEST(0, other_usd)) AS received_usd
+      FROM payments_usd
+    )
+    SELECT
+      COALESCE(SUM(CASE WHEN currency = 'USD' THEN total_usd ELSE 0 END), 0) AS usd_expected,
+      COALESCE(SUM(CASE WHEN currency = 'BS' THEN total_usd * rate ELSE 0 END), 0) AS bs_expected,
+      COALESCE(SUM(CASE WHEN currency = 'USD' THEN LEAST(received_usd, capped_first_usd) ELSE 0 END), 0) AS first_received_usd,
+      COALESCE(SUM(CASE WHEN currency = 'BS' THEN LEAST(received_usd, capped_first_usd) * rate ELSE 0 END), 0) AS first_received_bs,
+      COALESCE(SUM(CASE WHEN currency = 'USD' THEN GREATEST(0, received_usd - LEAST(received_usd, capped_first_usd)) ELSE 0 END), 0) AS other_received_usd,
+      COALESCE(SUM(CASE WHEN currency = 'BS' THEN GREATEST(0, received_usd - LEAST(received_usd, capped_first_usd)) * rate ELSE 0 END), 0) AS other_received_bs,
+      COALESCE(SUM(CASE WHEN currency = 'USD' THEN received_usd ELSE 0 END), 0) AS usd_received,
+      COALESCE(SUM(CASE WHEN currency = 'BS' THEN received_usd * rate ELSE 0 END), 0) AS bs_received,
+      COALESCE(SUM(CASE WHEN currency = 'USD' THEN GREATEST(0, total_usd - received_usd) ELSE 0 END), 0) AS usd_pending,
+      COALESCE(SUM(CASE WHEN currency = 'BS' THEN GREATEST(0, total_usd - received_usd) * rate ELSE 0 END), 0) AS bs_pending
+    FROM bounded_payments
+  `, [exchangeRate]);
+  const ledgerRow = paymentLedgerRes.rows[0] || {};
+  const paymentLedger = {
+    USD: {
+      expected: Number(ledgerRow.usd_expected || 0),
+      first: Number(ledgerRow.first_received_usd || 0),
+      other: Number(ledgerRow.other_received_usd || 0),
+      received: Number(ledgerRow.usd_received || 0),
+      pending: Number(ledgerRow.usd_pending || 0)
+    },
+    BS: {
+      expected: Number(ledgerRow.bs_expected || 0),
+      first: Number(ledgerRow.first_received_bs || 0),
+      other: Number(ledgerRow.other_received_bs || 0),
+      received: Number(ledgerRow.bs_received || 0),
+      pending: Number(ledgerRow.bs_pending || 0)
+    }
+  };
 
   const trend = trendRes.rows.map((row) => ({
     month: row.month,
@@ -1391,6 +1468,7 @@ export const getDashboardStats = async () => {
     bestSeller: bestSellerRes.rows[0] ? { name: bestSellerRes.rows[0].title, qty: Number(bestSellerRes.rows[0].qty) } : null,
     revenueUsd: Number(revenueRes.rows[0].usd),
     revenueBs: Number(revenueRes.rows[0].usd) * exchangeRate,
+    paymentLedger,
     exchangeRate,
     pendingOrders: Number(counts.pending || 0),
     approvedOrders: Number(counts.approved || 0),
