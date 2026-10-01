@@ -695,7 +695,9 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
   const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
   const totalAmount = subtotalAmount;
   const exchangeRate = await getExchangeRate();
-  const normalizedCurrency = paymentMethod === 'pago_movil' ? 'BS' : 'USD';
+  const normalizedCurrency = paymentPlan === 'installments'
+    ? String(firstPaymentCurrency || 'USD').toUpperCase()
+    : 'USD';
   const normalizedFirstPaymentAmount = paymentPlan === 'installments' ? Number(firstPaymentAmount) : 0;
   if (paymentPlan === 'installments') {
     if (!Number.isFinite(normalizedFirstPaymentAmount) || normalizedFirstPaymentAmount <= 0 || !['USD', 'BS'].includes(normalizedCurrency)) {
@@ -1063,7 +1065,7 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
             delivery_method = $5, shipping_details = $6, status = $7
         WHERE id = $8
       RETURNING *
-      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, payload.payment_method === 'pago_movil' ? 'BS' : 'USD', fullPaymentAmount, deliveryPaymentAmount]);
+      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount]);
 
     if (payload.delivery_method === 'national') {
       await client.query(`
@@ -1075,7 +1077,7 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
       await client.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
     }
 
-    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DETAILS', 'orders', orderId, JSON.stringify({ payment_method: payload.payment_method, payment_plan: paymentPlan, first_payment_amount: firstPaymentAmount, first_payment_currency: payload.payment_method === 'pago_movil' ? 'BS' : 'USD', full_payment_amount: fullPaymentAmount, delivery_payment_amount: deliveryPaymentAmount, delivery_method: payload.delivery_method, status: payload.status })]);
+    await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER_DETAILS', 'orders', orderId, JSON.stringify({ payment_method: payload.payment_method, payment_plan: paymentPlan, first_payment_amount: firstPaymentAmount, first_payment_currency: firstPaymentCurrency, full_payment_amount: fullPaymentAmount, delivery_payment_amount: deliveryPaymentAmount, delivery_method: payload.delivery_method, status: payload.status })]);
     await client.query('COMMIT');
     return mapOrder(updated.rows[0]);
   } catch (error) {
