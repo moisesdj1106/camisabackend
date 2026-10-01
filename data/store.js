@@ -732,7 +732,7 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('Debes agregar al menos un producto al pedido.');
   }
-  if (!['whatsapp', 'pago_movil', 'efectivo', 'binance'].includes(paymentMethod)) {
+  if (!['pago_movil', 'efectivo', 'binance'].includes(paymentMethod)) {
     throw new Error('Debes seleccionar un método de pago válido.');
   }
   if (!['full', 'installments'].includes(paymentPlan)) {
@@ -1003,7 +1003,7 @@ export const updateOrderDiscount = async (orderId, discountPercent, userId) => {
 };
 
 export const updateOrderAdmin = async (orderId, payload, userId) => {
-  const allowedPaymentMethods = new Set(['whatsapp', 'pago_movil', 'efectivo', 'binance']);
+  const allowedPaymentMethods = new Set(['pago_movil', 'efectivo', 'binance']);
   const paymentPlan = payload.payment_plan || 'full';
   const allowedDeliveryMethods = new Set(['personal', 'national']);
   if (!allowedPaymentMethods.has(payload.payment_method) || !['full', 'installments'].includes(paymentPlan) || !allowedDeliveryMethods.has(payload.delivery_method)) {
@@ -1380,7 +1380,7 @@ export const getDashboardStats = async () => {
     WITH active_orders AS (
       SELECT
         CASE
-          WHEN COALESCE(first_payment_currency, '') = 'BS' OR REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
+          WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
           ELSE 'USD'
         END AS currency,
         total_amount::numeric AS total_usd,

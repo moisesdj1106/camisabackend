@@ -33,7 +33,7 @@ ordersRouter.post('/', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'Cada producto debe tener una talla seleccionada.' });
     }
 
-    if (!['whatsapp', 'pago_movil', 'efectivo', 'binance'].includes(payment_method)) {
+    if (!['pago_movil', 'efectivo', 'binance'].includes(payment_method)) {
       return res.status(400).json({ error: 'Debes seleccionar un método de pago.' });
     }
 

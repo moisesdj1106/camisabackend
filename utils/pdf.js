@@ -17,7 +17,6 @@ const findLogoPath = () => {
 };
 
 const paymentMethodLabels = {
-  whatsapp: 'WhatsApp',
   pago_movil: 'Pago Móvil',
   efectivo: 'Efectivo',
   binance: 'Binance'
