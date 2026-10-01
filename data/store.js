@@ -1328,28 +1328,29 @@ export const getDashboardStats = async () => {
   const metricsParams = [metricsResetAt];
   const productsRes = await pool.query('SELECT COUNT(*)::int AS count FROM products');
   const stockRes = await pool.query('SELECT COALESCE(SUM(stock), 0)::int AS stock FROM products');
+  const confirmedStatuses = ['approved', 'preparing', 'ready_pickup', 'shipped', 'delivered'];
   const soldItemsRes = await pool.query(`
     SELECT COALESCE(SUM(oi.quantity), 0)::int AS count
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
-  `, metricsParams);
+    WHERE o.status = ANY($1::varchar[]) AND ($2::timestamp IS NULL OR o.created_at >= $2::timestamp)
+  `, [confirmedStatuses, metricsParams[0]]);
   const revenueRes = await pool.query(`
     SELECT COALESCE(SUM(total_amount), 0)::numeric(12,2) AS usd
     FROM orders
-    WHERE status = 'approved' AND ($1::timestamp IS NULL OR created_at >= $1::timestamp)
-  `, metricsParams);
+    WHERE status = ANY($1::varchar[]) AND ($2::timestamp IS NULL OR created_at >= $2::timestamp)
+  `, [confirmedStatuses, metricsParams[0]]);
   const lowStockRes = await pool.query('SELECT * FROM products WHERE stock = 0');
   const bestSellerRes = await pool.query(`
     SELECT p.title, SUM(oi.quantity) AS qty
     FROM order_items oi
     LEFT JOIN products p ON p.id = oi.product_id
     LEFT JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
+    WHERE o.status = ANY($1::varchar[]) AND ($2::timestamp IS NULL OR o.created_at >= $2::timestamp)
     GROUP BY p.title
     ORDER BY qty DESC
     LIMIT 1
-  `, metricsParams);
+  `, [confirmedStatuses, metricsParams[0]]);
   const statusRes = await pool.query(`
     SELECT status, COUNT(*)::int AS count
     FROM orders
@@ -1359,27 +1360,27 @@ export const getDashboardStats = async () => {
   const trendRes = await pool.query(`
     SELECT to_char(created_at, 'YYYY-MM') AS month, COALESCE(SUM(total_amount), 0)::numeric(12,2) AS usd
     FROM orders
-    WHERE status = 'approved' AND created_at >= NOW() - INTERVAL '6 months'
-      AND ($1::timestamp IS NULL OR created_at >= $1::timestamp)
+    WHERE status = ANY($1::varchar[]) AND created_at >= NOW() - INTERVAL '6 months'
+      AND ($2::timestamp IS NULL OR created_at >= $2::timestamp)
     GROUP BY 1
     ORDER BY 1
-  `, metricsParams);
+  `, [confirmedStatuses, metricsParams[0]]);
   const topProductsRes = await pool.query(`
     SELECT p.title, SUM(oi.quantity)::int AS qty, COALESCE(SUM(oi.quantity * oi.unit_price), 0)::numeric(12,2) AS revenue
     FROM order_items oi
     LEFT JOIN orders o ON o.id = oi.order_id
     LEFT JOIN products p ON p.id = oi.product_id
-    WHERE o.status = 'approved' AND ($1::timestamp IS NULL OR o.created_at >= $1::timestamp)
+    WHERE o.status = ANY($1::varchar[]) AND ($2::timestamp IS NULL OR o.created_at >= $2::timestamp)
     GROUP BY p.title
     ORDER BY revenue DESC, qty DESC
     LIMIT 4
-  `, metricsParams);
+  `, [confirmedStatuses, metricsParams[0]]);
   const exchangeRate = await getExchangeRate();
   const paymentLedgerRes = await pool.query(`
     WITH active_orders AS (
       SELECT
         CASE
-          WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
+          WHEN COALESCE(first_payment_currency, '') = 'BS' OR REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS'
           ELSE 'USD'
         END AS currency,
         total_amount::numeric AS total_usd,
