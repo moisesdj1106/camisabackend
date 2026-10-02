@@ -94,6 +94,13 @@ const getProductFieldEntries = (payload) => {
 
 const validateProductDorsalOption = (product, item) => {
   if (!product) throw new Error('El producto seleccionado no está disponible.');
+  const hasCustomDorsal = Boolean(item.custom_name || item.custom_number);
+  if (item.no_dorsal !== true && !item.dorsal_number && !hasCustomDorsal) {
+    throw new Error('Selecciona un dorsal o indica que la camiseta va sin dorsal.');
+  }
+  if (hasCustomDorsal && (!item.custom_name || !item.custom_number)) {
+    throw new Error('Completa el nombre y número de la personalización.');
+  }
   if (item.no_dorsal === true && product.allow_no_dorsal === false) {
     throw new Error(`La camiseta ${product.title} no se vende sin dorsal.`);
   }
@@ -682,14 +689,20 @@ export const deleteProduct = async (id) => {
 };
 
 export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount = 0, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails }) => {
+  const requestedStock = new Map();
   for (const item of items) {
     const product = await getProductById(Number(item.product_id));
     validateProductDorsalOption(product, item);
+    if (!String(item.size || '').trim()) throw new Error('Selecciona una talla para cada camiseta.');
     const stockBySize = product?.stock_by_size || {};
-    if (Object.keys(stockBySize).length && Number(item.quantity) > Number(stockBySize[item.size] || 0)) {
-      const available = Number(stockBySize[item.size] || 0);
+    const tracksSizes = Object.keys(stockBySize).length > 0;
+    const stockKey = `${product.id}:${tracksSizes ? item.size : 'all'}`;
+    const requested = (requestedStock.get(stockKey) || 0) + Math.max(1, Number(item.quantity) || 1);
+    const available = tracksSizes ? Number(stockBySize[item.size] || 0) : Number(product.stock || 0);
+    if (requested > available) {
       throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
     }
+    requestedStock.set(stockKey, requested);
   }
   const pricedItems = await Promise.all(items.map(async (item) => {
     const product = await getProductById(Number(item.product_id));
@@ -828,6 +841,11 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
   if (status && status !== 'pending') {
     await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, order.order.id]);
     order.order.status = status;
+    if (status === 'approved') {
+      for (const item of order.items) {
+        await adjustProductStock(pool, item.product_id, item.size, -Number(item.quantity));
+      }
+    }
   }
 
   await pool.query(
