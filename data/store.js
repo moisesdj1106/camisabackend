@@ -1120,14 +1120,14 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
             full_payment_amount = $11::numeric, delivery_payment_amount = $12::numeric,
             delivery_payment_currency = $13::varchar,
             payment_received_at = CASE
-              WHEN $3::varchar = 'full' AND $2 IS NULL AND $11::numeric = 0 THEN NULL
-              WHEN $14::boolean OR (payment_received_at IS NULL AND (($3::varchar = 'installments' AND ($2 IS NOT NULL OR $9::numeric > 0)) OR ($3::varchar = 'full' AND ($2 IS NOT NULL OR $11::numeric > 0)))) THEN CURRENT_TIMESTAMP
+              WHEN $3::varchar = 'full' AND $2::text IS NULL AND $11::numeric = 0 THEN NULL
+              WHEN $14::boolean OR (payment_received_at IS NULL AND (($3::varchar = 'installments' AND ($2::text IS NOT NULL OR $9::numeric > 0)) OR ($3::varchar = 'full' AND ($2::text IS NOT NULL OR $11::numeric > 0)))) THEN CURRENT_TIMESTAMP
               ELSE payment_received_at
             END,
             delivery_payment_received_at = CASE
               WHEN $3::varchar <> 'installments' THEN NULL
-              WHEN $4 IS NULL AND $12::numeric = 0 THEN NULL
-              WHEN $15::boolean OR (delivery_payment_received_at IS NULL AND ($4 IS NOT NULL OR $12::numeric > 0)) THEN CURRENT_TIMESTAMP
+              WHEN $4::text IS NULL AND $12::numeric = 0 THEN NULL
+              WHEN $15::boolean OR (delivery_payment_received_at IS NULL AND ($4::text IS NOT NULL OR $12::numeric > 0)) THEN CURRENT_TIMESTAMP
               ELSE delivery_payment_received_at
             END,
             delivery_method = $5, shipping_details = $6, status = $7
