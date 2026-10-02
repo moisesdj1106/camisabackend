@@ -155,6 +155,8 @@ const mapOrder = (row) => (row ? {
   delivery_payment_currency: row.delivery_payment_currency || null,
   payment_proof_url: row.payment_proof_url,
   delivery_payment_proof_url: row.delivery_payment_proof_url || null,
+  payment_received_at: row.payment_received_at || null,
+  delivery_payment_received_at: row.delivery_payment_received_at || null,
   delivery_method: row.delivery_method || 'personal',
   shipping_details: row.shipping_details || null,
   status: row.status,
@@ -376,6 +378,8 @@ export const initializeStore = async () => {
       delivery_payment_currency VARCHAR(3),
       payment_proof_url TEXT,
       delivery_payment_proof_url TEXT,
+      payment_received_at TIMESTAMPTZ,
+      delivery_payment_received_at TIMESTAMPTZ,
       delivery_method VARCHAR(20) NOT NULL DEFAULT 'personal',
       shipping_details JSONB,
       status VARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -395,6 +399,8 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS full_payment_amount NUMERIC(12,2) NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_amount NUMERIC(12,2) NOT NULL DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_currency VARCHAR(3);`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_received_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_received_at TIMESTAMPTZ;`);
   await pool.query(`UPDATE orders SET delivery_payment_currency = CASE WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS' ELSE 'USD' END WHERE delivery_payment_currency IS NULL;`);
   await pool.query(`UPDATE orders SET payment_plan = 'installments' WHERE delivery_payment_proof_url IS NOT NULL AND payment_plan = 'full';`);
 
@@ -734,7 +740,11 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
     }
   }
   const orderRes = await pool.query(
-    'INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate) VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, $17) RETURNING *',
+    `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate, payment_received_at, delivery_payment_received_at)
+      VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, $17,
+        CASE WHEN $12 IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
+        CASE WHEN $13 IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
+      RETURNING *`,
     [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || totalAmount) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
   const order = mapOrder(orderRes.rows[0]);
@@ -1063,6 +1073,16 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
     const deliveryPaymentAmount = paymentPlan === 'installments'
       ? Number(payload.delivery_payment_amount !== undefined && payload.delivery_payment_amount !== '' ? payload.delivery_payment_amount : currentOrder.delivery_payment_amount || 0)
       : 0;
+    const currentPrimaryPaymentAmount = currentOrder.payment_plan === 'installments'
+      ? Number(currentOrder.first_payment_amount || 0)
+      : Number(currentOrder.full_payment_amount || 0);
+    const primaryPaymentAmount = paymentPlan === 'installments' ? firstPaymentAmount : fullPaymentAmount;
+    const firstPaymentChanged = paymentPlan !== currentOrder.payment_plan
+      || paymentProofUrl !== currentOrder.payment_proof_url
+      || primaryPaymentAmount !== currentPrimaryPaymentAmount;
+    const finalPaymentChanged = paymentPlan !== currentOrder.payment_plan
+      || (payload.delivery_payment_proof_url || null) !== (currentOrder.delivery_payment_proof_url || null)
+      || deliveryPaymentAmount !== Number(currentOrder.delivery_payment_amount || 0);
     if (![fullPaymentAmount, deliveryPaymentAmount].every((amount) => Number.isFinite(amount) && amount >= 0)) {
       throw new Error('Los montos recibidos deben ser números válidos y no negativos.');
     }
@@ -1099,10 +1119,21 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
             first_payment_amount = $9::numeric, first_payment_currency = $10::varchar,
             full_payment_amount = $11::numeric, delivery_payment_amount = $12::numeric,
             delivery_payment_currency = $13::varchar,
+            payment_received_at = CASE
+              WHEN $3::varchar = 'full' AND $2 IS NULL AND $11::numeric = 0 THEN NULL
+              WHEN $14::boolean OR (payment_received_at IS NULL AND (($3::varchar = 'installments' AND ($2 IS NOT NULL OR $9::numeric > 0)) OR ($3::varchar = 'full' AND ($2 IS NOT NULL OR $11::numeric > 0)))) THEN CURRENT_TIMESTAMP
+              ELSE payment_received_at
+            END,
+            delivery_payment_received_at = CASE
+              WHEN $3::varchar <> 'installments' THEN NULL
+              WHEN $4 IS NULL AND $12::numeric = 0 THEN NULL
+              WHEN $15::boolean OR (delivery_payment_received_at IS NULL AND ($4 IS NOT NULL OR $12::numeric > 0)) THEN CURRENT_TIMESTAMP
+              ELSE delivery_payment_received_at
+            END,
             delivery_method = $5, shipping_details = $6, status = $7
         WHERE id = $8
       RETURNING *
-      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency]);
+      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency, firstPaymentChanged, finalPaymentChanged]);
 
     if (payload.delivery_method === 'national') {
       await client.query(`
@@ -1226,7 +1257,21 @@ export const updateOrderStatus = async (orderId, status, userId) => {
   const previousOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
   const previousStatus = previousOrder.rows[0]?.status;
   if (!previousOrder.rows[0]) return null;
-  await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, orderId]);
+  await pool.query(`
+    UPDATE orders SET
+      status = $1,
+      payment_received_at = CASE
+        WHEN $1 = ANY($3::varchar[]) AND payment_received_at IS NULL
+          AND (payment_proof_url IS NOT NULL OR first_payment_amount > 0 OR full_payment_amount > 0)
+        THEN CURRENT_TIMESTAMP ELSE payment_received_at
+      END,
+      delivery_payment_received_at = CASE
+        WHEN $1 = ANY($3::varchar[]) AND payment_plan = 'installments' AND delivery_payment_received_at IS NULL
+          AND (delivery_payment_proof_url IS NOT NULL OR delivery_payment_amount > 0)
+        THEN CURRENT_TIMESTAMP ELSE delivery_payment_received_at
+      END
+    WHERE id = $2
+  `, [status, orderId, ['approved', 'preparing', 'ready_pickup', 'shipped', 'delivered']]);
   if (status === 'approved' && previousStatus !== 'approved') {
     const itemsRes = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
     for (const item of itemsRes.rows) {
