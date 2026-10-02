@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
@@ -134,6 +134,26 @@ adminRouter.get('/exchange-rate', async (req, res) => {
 adminRouter.get('/closures', authMiddleware, adminOnly, async (req, res) => {
   const summary = await getSalesClosureSummary(req.query.period || 'day', req.query.date || new Date().toISOString());
   res.json(summary);
+});
+
+adminRouter.get('/closures/daily', authMiddleware, adminOnly, async (req, res) => {
+  res.json(await getDailyClosureReport());
+});
+
+adminRouter.post('/closures/daily/close', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    res.json(await createSalesClosure('day'));
+  } catch (error) {
+    res.status(409).json({ error: error.message || 'No se pudo cerrar el conteo diario.' });
+  }
+});
+
+adminRouter.post('/closures/daily/open', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    res.json(await openDailyClosure());
+  } catch (error) {
+    res.status(409).json({ error: error.message || 'No se pudo abrir el conteo diario.' });
+  }
 });
 
 adminRouter.post('/closures', authMiddleware, adminOnly, async (req, res) => {

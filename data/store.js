@@ -1318,7 +1318,11 @@ const normalizeClosurePeriod = (periodType = 'day') => {
 };
 
 const getClosureWindow = (periodType = 'day', referenceDate = new Date()) => {
-  const date = referenceDate instanceof Date ? new Date(referenceDate) : new Date(referenceDate);
+  const date = referenceDate instanceof Date
+    ? new Date(referenceDate)
+    : /^\d{4}-\d{2}-\d{2}$/.test(String(referenceDate))
+      ? new Date(`${referenceDate}T12:00:00`)
+      : new Date(referenceDate);
   const start = new Date(date);
   const end = new Date(date);
 
@@ -1346,64 +1350,255 @@ const getClosureWindow = (periodType = 'day', referenceDate = new Date()) => {
   return { start, end, label };
 };
 
-export const getSalesClosureSummary = async (periodType = 'day', referenceDate = new Date()) => {
-  const safePeriod = normalizeClosurePeriod(periodType);
-  const { start, end, label } = getClosureWindow(safePeriod, referenceDate);
+const formatClosureDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
-  const ordersRes = await pool.query(`
-    SELECT id, total_amount, created_at
+const saveSystemSetting = async (key, value) => {
+  await pool.query(`
+    INSERT INTO system_settings (key, value, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+  `, [key, String(value)]);
+};
+
+const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) => {
+  const fallbackRate = Number(await getExchangeRate()) || 1;
+  let localStart;
+  let localEnd;
+  if (calendarDates) {
+    localStart = `${startDate}T00:00:00.000000`;
+    localEnd = `${endDate}T23:59:59.999999`;
+  } else {
+    const bounds = await pool.query(`
+      SELECT
+        to_char($1::timestamp AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD"T"HH24:MI:SS.US') AS local_start,
+        to_char($2::timestamp AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD"T"HH24:MI:SS.US') AS local_end
+    `, [startDate, endDate]);
+    localStart = bounds.rows[0].local_start;
+    localEnd = bounds.rows[0].local_end;
+  }
+
+  const result = await pool.query(`
+    SELECT id, total_amount, payment_method, payment_plan, exchange_rate,
+      first_payment_amount, first_payment_currency, full_payment_amount,
+      delivery_payment_amount, delivery_payment_currency,
+      payment_proof_url, delivery_payment_proof_url,
+      to_char(COALESCE(payment_received_at AT TIME ZONE 'America/Caracas', created_at AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas'), 'YYYY-MM-DD"T"HH24:MI:SS.US') AS first_payment_local,
+      to_char(COALESCE(delivery_payment_received_at AT TIME ZONE 'America/Caracas', created_at AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas'), 'YYYY-MM-DD"T"HH24:MI:SS.US') AS final_payment_local
     FROM orders
-    WHERE status = 'approved' AND created_at >= $1 AND created_at <= $2
-    ORDER BY created_at DESC
-  `, [start, end]);
+    WHERE status IN ('approved', 'preparing', 'ready_pickup', 'shipped', 'delivered')
+  `);
 
+  const paymentTotals = { USD: 0, BS: 0, totalUsd: 0 };
+  const payments = [];
+  const toUsd = (amount, currency, rate) => currency === 'BS' ? amount / rate : amount;
+  const isWithinPeriod = (date) => date >= localStart && date <= localEnd;
+
+  result.rows.forEach((order) => {
+    const totalUsd = Number(order.total_amount || 0);
+    const storedRate = Number(order.exchange_rate || 0);
+    const rate = storedRate > 0 ? storedRate : fallbackRate;
+    const normalizedMethod = String(order.payment_method || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const methodCurrency = normalizedMethod === 'pagomovil' ? 'BS' : 'USD';
+    const entries = [];
+    let paidUsd = 0;
+
+    if (order.payment_plan === 'installments') {
+      const firstAmount = Number(order.first_payment_amount || 0);
+      const firstCurrency = String(order.first_payment_currency || 'USD').toUpperCase() === 'BS' ? 'BS' : 'USD';
+      const firstUsd = Math.max(0, toUsd(firstAmount, firstCurrency, rate));
+      paidUsd += firstUsd;
+      if (firstAmount > 0 && isWithinPeriod(order.first_payment_local)) {
+        entries.push({ kind: 'Abono inicial', amount: firstAmount, currency: firstCurrency, amountUsd: firstUsd, receivedAt: order.first_payment_local });
+      }
+
+      const finalCurrency = String(order.delivery_payment_currency || methodCurrency).toUpperCase() === 'BS' ? 'BS' : 'USD';
+      const storedFinalAmount = Number(order.delivery_payment_amount || 0);
+      const finalAmount = storedFinalAmount > 0
+        ? storedFinalAmount
+        : order.delivery_payment_proof_url ? Math.max(0, totalUsd - firstUsd) * (finalCurrency === 'BS' ? rate : 1) : 0;
+      const finalUsd = Math.max(0, toUsd(finalAmount, finalCurrency, rate));
+      paidUsd += finalUsd;
+      if (finalAmount > 0 && isWithinPeriod(order.final_payment_local)) {
+        entries.push({ kind: 'Abono final', amount: finalAmount, currency: finalCurrency, amountUsd: finalUsd, receivedAt: order.final_payment_local });
+      }
+    } else {
+      const storedAmount = Number(order.full_payment_amount || 0);
+      const amount = storedAmount > 0 ? storedAmount : totalUsd * (methodCurrency === 'BS' ? rate : 1);
+      const amountUsd = Math.max(0, toUsd(amount, methodCurrency, rate));
+      paidUsd = amountUsd;
+      if (amount > 0 && isWithinPeriod(order.first_payment_local)) {
+        entries.push({ kind: 'Pago completo', amount, currency: methodCurrency, amountUsd, receivedAt: order.first_payment_local });
+      }
+    }
+
+    const remainingUsd = Math.max(0, totalUsd - Math.min(totalUsd, paidUsd));
+    entries.forEach((entry) => {
+      const payment = {
+        orderId: order.id,
+        ...entry,
+        remainingUsd,
+        remainingBs: remainingUsd * rate
+      };
+      payments.push(payment);
+      paymentTotals[entry.currency] += entry.amount;
+      paymentTotals.totalUsd += entry.amountUsd;
+    });
+  });
+
+  return {
+    payments: payments.sort((left, right) => left.receivedAt.localeCompare(right.receivedAt)),
+    paymentTotals,
+    paymentOrdersCount: new Set(payments.map((payment) => payment.orderId)).size
+  };
+};
+
+const buildClosureSummary = async ({ periodType, periodLabel, startDate, endDate, calendarDates = false }) => {
+  const datePredicate = (column) => calendarDates
+    ? `(${column} AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas')::date >= $1::date AND (${column} AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas')::date <= $2::date`
+    : `${column} >= $1::timestamp AND ${column} <= $2::timestamp`;
+  const ordersRes = await pool.query(`
+    SELECT id, total_amount,
+      to_char(created_at AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD"T"HH24:MI:SS') AS created_at_local
+    FROM orders
+    WHERE status = 'approved' AND ${datePredicate('created_at')}
+    ORDER BY created_at DESC
+  `, [startDate, endDate]);
   const itemsRes = await pool.query(`
     SELECT oi.order_id, oi.quantity, oi.unit_price, p.title
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
     LEFT JOIN products p ON p.id = oi.product_id
-    WHERE o.status = 'approved' AND o.created_at >= $1 AND o.created_at <= $2
+    WHERE o.status = 'approved' AND ${datePredicate('o.created_at')}
     ORDER BY oi.order_id, oi.id
-  `, [start, end]);
+  `, [startDate, endDate]);
 
   const orders = ordersRes.rows.map((row) => ({
     id: row.id,
     totalAmount: Number(row.total_amount),
-    createdAt: row.created_at
+    createdAt: row.created_at_local
   }));
-
   const itemsByOrder = itemsRes.rows.reduce((acc, row) => {
     if (!acc[row.order_id]) acc[row.order_id] = [];
-    acc[row.order_id].push({
-      title: row.title || 'Producto',
-      quantity: Number(row.quantity),
-      unitPrice: Number(row.unit_price)
-    });
+    acc[row.order_id].push({ title: row.title || 'Producto', quantity: Number(row.quantity), unitPrice: Number(row.unit_price) });
     return acc;
   }, {});
-
-  const totalAmount = orders.reduce((sum, order) => sum + Number(order.totalAmount), 0);
-  const itemsSold = itemsRes.rows.reduce((sum, row) => sum + Number(row.quantity), 0);
+  const paymentSummary = await getClosurePaymentEvents({ startDate, endDate, calendarDates });
 
   return {
-    periodType: safePeriod,
-    periodLabel: label,
-    startDate: start.toISOString(),
-    endDate: end.toISOString(),
-    totalAmount,
+    periodType,
+    periodLabel,
+    startDate,
+    endDate,
+    totalAmount: orders.reduce((sum, order) => sum + order.totalAmount, 0),
     ordersCount: orders.length,
-    itemsSold,
+    itemsSold: itemsRes.rows.reduce((sum, row) => sum + Number(row.quantity), 0),
     orders,
-    itemsByOrder
+    itemsByOrder,
+    ...paymentSummary
   };
 };
 
+const getDailyClosureState = async () => {
+  const result = await pool.query(`
+    SELECT
+      (SELECT value FROM system_settings WHERE key = 'daily_closure_open') AS is_open,
+      (SELECT value FROM system_settings WHERE key = 'daily_closure_started_at') AS started_at,
+      LOCALTIMESTAMP::text AS now,
+      (CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas')::date::text AS today,
+      (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') AT TIME ZONE 'America/Caracas' AT TIME ZONE current_setting('TIMEZONE'))::text AS today_start
+  `);
+  const row = result.rows[0];
+  const isOpen = row.is_open === null ? true : row.is_open === 'true';
+  let startedAt = row.started_at;
+
+  if (!startedAt) {
+    startedAt = row.today_start;
+    await saveSystemSetting('daily_closure_started_at', startedAt);
+    await saveSystemSetting('daily_closure_open', 'true');
+  } else if (isOpen && startedAt.slice(0, 10) < row.today) {
+    startedAt = row.today_start;
+    await saveSystemSetting('daily_closure_started_at', startedAt);
+  }
+
+  return { isOpen, startedAt, now: row.now, today: row.today };
+};
+
+export const getDailyClosureReport = async () => {
+  const state = await getDailyClosureState();
+  if (state.isOpen) {
+    const periodLabel = new Date(`${state.today}T12:00:00`).toLocaleDateString('es-VE');
+    return {
+      ...(await buildClosureSummary({ periodType: 'day', periodLabel, startDate: state.startedAt, endDate: state.now })),
+      isOpen: true,
+      countStartedAt: state.startedAt
+    };
+  }
+
+  const result = await pool.query(`
+    SELECT period_label, start_date, end_date, total_amount, orders_count, items_sold, details
+    FROM daily_closures
+    WHERE period_type = 'day'
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+  const closure = result.rows[0];
+  const details = closure ? (typeof closure.details === 'string' ? JSON.parse(closure.details) : closure.details || []) : [];
+  const legacyOrders = Array.isArray(details) ? details : details.orders || [];
+  return closure ? {
+    periodType: 'day',
+    periodLabel: closure.period_label,
+    startDate: closure.start_date,
+    endDate: closure.end_date,
+    totalAmount: Number(closure.total_amount),
+    ordersCount: Number(closure.orders_count),
+    itemsSold: Number(closure.items_sold),
+    orders: legacyOrders,
+    payments: Array.isArray(details) ? [] : details.payments || [],
+    paymentTotals: Array.isArray(details) ? { USD: 0, BS: 0, totalUsd: 0 } : details.paymentTotals || { USD: 0, BS: 0, totalUsd: 0 },
+    paymentOrdersCount: Array.isArray(details) ? 0 : details.paymentOrdersCount || 0,
+    itemsByOrder: {},
+    isOpen: false,
+    countStartedAt: null
+  } : { periodType: 'day', periodLabel: '', totalAmount: 0, ordersCount: 0, itemsSold: 0, orders: [], payments: [], paymentTotals: { USD: 0, BS: 0, totalUsd: 0 }, paymentOrdersCount: 0, itemsByOrder: {}, isOpen: false, countStartedAt: null };
+};
+
+export const openDailyClosure = async () => {
+  const state = await getDailyClosureState();
+  if (state.isOpen) throw new Error('El conteo diario ya está abierto.');
+  const result = await pool.query('SELECT LOCALTIMESTAMP::text AS started_at');
+  await saveSystemSetting('daily_closure_started_at', result.rows[0].started_at);
+  await saveSystemSetting('daily_closure_open', 'true');
+  return getDailyClosureReport();
+};
+
+export const getSalesClosureSummary = async (periodType = 'day', referenceDate = new Date()) => {
+  const safePeriod = normalizeClosurePeriod(periodType);
+  const { start, end, label } = getClosureWindow(safePeriod, referenceDate);
+  const startDate = formatClosureDate(start);
+  const endDate = formatClosureDate(end);
+  return buildClosureSummary({ periodType: safePeriod, periodLabel: label, startDate, endDate, calendarDates: true });
+};
+
 export const createSalesClosure = async (periodType = 'day', referenceDate = new Date()) => {
-  const summary = await getSalesClosureSummary(periodType, referenceDate);
+  const safePeriod = normalizeClosurePeriod(periodType);
+  let summary;
+  if (safePeriod === 'day') {
+    const state = await getDailyClosureState();
+    if (!state.isOpen) throw new Error('Abre el conteo del día antes de generar un cierre nuevo.');
+    const periodLabel = new Date(`${state.today}T12:00:00`).toLocaleDateString('es-VE');
+    summary = {
+      ...(await buildClosureSummary({ periodType: 'day', periodLabel, startDate: state.startedAt, endDate: state.now })),
+      isOpen: false,
+      countStartedAt: state.startedAt
+    };
+  } else {
+    summary = await getSalesClosureSummary(safePeriod, referenceDate);
+  }
   await pool.query(`
     INSERT INTO daily_closures (period_type, period_label, start_date, end_date, total_amount, orders_count, items_sold, details)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-  `, [summary.periodType, summary.periodLabel, summary.startDate, summary.endDate, Number(summary.totalAmount).toFixed(2), summary.ordersCount, summary.itemsSold, JSON.stringify(summary.orders)]);
+  `, [summary.periodType, summary.periodLabel, summary.startDate, summary.endDate, Number(summary.totalAmount).toFixed(2), summary.ordersCount, summary.itemsSold, JSON.stringify({ orders: summary.orders, payments: summary.payments || [], paymentTotals: summary.paymentTotals || { USD: 0, BS: 0, totalUsd: 0 }, paymentOrdersCount: summary.paymentOrdersCount || 0 })]);
+  if (safePeriod === 'day') await saveSystemSetting('daily_closure_open', 'false');
   return summary;
 };
 
