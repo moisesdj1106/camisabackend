@@ -742,8 +742,8 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
   const orderRes = await pool.query(
     `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate, payment_received_at, delivery_payment_received_at)
       VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, $17,
-        CASE WHEN $12 IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
-        CASE WHEN $13 IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
+        CASE WHEN $12::text IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
+        CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
       RETURNING *`,
     [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || totalAmount) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
   );
