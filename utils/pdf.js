@@ -416,11 +416,6 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
   const contentWidth = 523;
   const footerY = 755;
   let pageNumber = 1;
-  const totalDeposits = requests.reduce((totals, request) => {
-    totals[request.deposit_currency] = (totals[request.deposit_currency] || 0) + Number(request.deposit_amount || 0);
-    return totals;
-  }, { USD: 0, BS: 0 });
-
   const drawPageHeader = () => {
     doc.y = 36;
     doc.roundedRect(contentX, 36, contentWidth, 62, 10).fill('#0f2d52');
@@ -513,12 +508,6 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
     doc.fillColor('#475569').fontSize(11).text('No hay solicitudes registradas para este período.', contentX + 20, doc.y + 23, { width: contentWidth - 40, align: 'center' });
     doc.y += 68;
   }
-  ensureSpace(28);
-  doc.moveDown(0.4);
-  doc.fillColor('#0f2d52').fontSize(9).text(
-    `Abonos registrados aparte: $${totalDeposits.USD.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · BS ${totalDeposits.BS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-    contentX, doc.y, { width: contentWidth, align: 'right' }
-  );
   drawPageFooter();
   doc.end();
   return await new Promise((resolve) => {
