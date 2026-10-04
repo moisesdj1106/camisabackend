@@ -383,10 +383,13 @@ export const initializeStore = async () => {
       delivery_method VARCHAR(20) NOT NULL DEFAULT 'personal',
       shipping_details JSONB,
       status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      stock_reserved BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_reserved BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`UPDATE orders SET stock_reserved = TRUE WHERE status IN ('approved', 'preparing', 'ready_pickup', 'shipped', 'delivered') AND stock_reserved = FALSE;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_path TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number TEXT;`);
@@ -694,29 +697,19 @@ export const deleteProduct = async (id) => {
   await pool.query('DELETE FROM products WHERE id = $1', [id]);
 };
 
-export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount = 0, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails }) => {
-  const requestedStock = new Map();
-  for (const item of items) {
-    const product = await getProductById(Number(item.product_id));
-    validateProductDorsalOption(product, item);
+export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount = 0, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
+  if (!Array.isArray(items) || items.length === 0) throw new Error('El carrito está vacío.');
+  const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
+  if (!allowedStatuses.has(status)) throw new Error('Estado de pedido inválido.');
+
+  const normalizedItems = items.map((item) => {
+    const productId = Number(item.product_id);
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(productId) || productId < 1) throw new Error('Uno de los productos seleccionados no es válido.');
+    if (!Number.isInteger(quantity) || quantity < 1) throw new Error('La cantidad de cada producto debe ser un entero mayor que cero.');
     if (!String(item.size || '').trim()) throw new Error('Selecciona una talla para cada camiseta.');
-    const stockBySize = product?.stock_by_size || {};
-    const tracksSizes = Object.keys(stockBySize).length > 0;
-    const stockKey = `${product.id}:${tracksSizes ? item.size : 'all'}`;
-    const requested = (requestedStock.get(stockKey) || 0) + Math.max(1, Number(item.quantity) || 1);
-    const available = tracksSizes ? Number(stockBySize[item.size] || 0) : Number(product.stock || 0);
-    if (requested > available) {
-      throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
-    }
-    requestedStock.set(stockKey, requested);
-  }
-  const pricedItems = await Promise.all(items.map(async (item) => {
-    const product = await getProductById(Number(item.product_id));
-    const discount = Math.min(100, Math.max(0, Number(product?.discount_percent || 0)));
-    return { ...item, unit_price: Number(product?.price || item.unit_price) * (1 - discount / 100) };
-  }));
-  const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * Number(item.quantity), 0);
-  const totalAmount = subtotalAmount;
+    return { ...item, product_id: productId, size: String(item.size).trim().toUpperCase(), quantity };
+  });
   const exchangeRate = await getExchangeRate();
   const normalizedCurrency = paymentPlan === 'installments'
     ? String(firstPaymentCurrency || 'USD').toUpperCase()
@@ -732,35 +725,80 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
     if (!['USD', 'BS'].includes(normalizedDeliveryPaymentCurrency)) {
       throw new Error('Selecciona una moneda válida para el segundo pago.');
     }
-    const paidUsd = normalizedCurrency === 'BS'
-      ? normalizedFirstPaymentAmount / Number(exchangeRate)
-      : normalizedFirstPaymentAmount;
-    if (!Number.isFinite(paidUsd) || paidUsd >= totalAmount) {
-      throw new Error('El primer abono debe ser menor que el total; si ya se pagó todo, selecciona pago completo.');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const productIds = [...new Set(normalizedItems.map((item) => item.product_id))].sort((a, b) => a - b);
+    const productsResult = await client.query('SELECT * FROM products WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE', [productIds]);
+    const products = new Map(productsResult.rows.map((row) => [Number(row.id), mapProduct(row)]));
+    if (products.size !== productIds.length) throw new Error('Uno de los productos seleccionados ya no está disponible.');
+
+    const stockToReserve = new Map();
+    for (const item of normalizedItems) {
+      const product = products.get(item.product_id);
+      validateProductDorsalOption(product, item);
+      if (!product.is_active) throw new Error(`La camiseta ${product.title} no está disponible.`);
+      const tracksSizes = Object.keys(product.stock_by_size).length > 0;
+      const stockKey = `${product.id}:${tracksSizes ? item.size : 'all'}`;
+      const requested = (stockToReserve.get(stockKey)?.quantity || 0) + item.quantity;
+      stockToReserve.set(stockKey, { product, size: item.size, quantity: requested, tracksSizes });
     }
-  }
-  const orderRes = await pool.query(
-    `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, exchange_rate, payment_received_at, delivery_payment_received_at)
-      VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, $17,
-        CASE WHEN $12::text IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
-        CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
-      RETURNING *`,
-    [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || totalAmount) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, 'pending', Number(exchangeRate).toFixed(2)]
-  );
-  const order = mapOrder(orderRes.rows[0]);
-  for (const item of pricedItems) {
-    await pool.query(
-      'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-      [order.id, item.product_id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, item.quantity, item.unit_price]
+    for (const reservation of stockToReserve.values()) {
+      const available = reservation.tracksSizes
+        ? Number(reservation.product.stock_by_size[reservation.size] || 0)
+        : Number(reservation.product.stock || 0);
+      if (reservation.quantity > available) {
+        throw new Error(`No hay suficiente stock para la talla ${reservation.size}. Disponibles: ${available}.`);
+      }
+      await adjustProductStock(client, reservation.product.id, reservation.size, -reservation.quantity);
+    }
+
+    const pricedItems = normalizedItems.map((item) => {
+      const product = products.get(item.product_id);
+      const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
+      return { ...item, unit_price: Number(product.price) * (1 - discount / 100) };
+    });
+    const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0);
+    const totalAmount = subtotalAmount;
+    if (paymentPlan === 'installments') {
+      const paidUsd = normalizedCurrency === 'BS'
+        ? normalizedFirstPaymentAmount / Number(exchangeRate)
+        : normalizedFirstPaymentAmount;
+      if (!Number.isFinite(paidUsd) || paidUsd >= totalAmount) {
+        throw new Error('El primer abono debe ser menor que el total; si ya se pagó todo, selecciona pago completo.');
+      }
+    }
+    const orderRes = await client.query(
+      `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, stock_reserved, exchange_rate, payment_received_at, delivery_payment_received_at)
+        VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, TRUE, $17,
+          CASE WHEN $12::text IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
+          CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
+        RETURNING *`,
+      [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || totalAmount) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
     );
+    const order = mapOrder(orderRes.rows[0]);
+    for (const item of pricedItems) {
+      await client.query(
+        'INSERT INTO order_items (order_id, product_id, size, no_dorsal, dorsal_number, dorsal_name, custom_name, custom_number, quantity, unit_price) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+        [order.id, item.product_id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, item.quantity, item.unit_price]
+      );
+    }
+    if (deliveryMethod === 'national') {
+      await client.query(
+        'INSERT INTO order_shipping_details (order_id, full_name, phone, cedula, agency, city, state) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [order.id, shippingDetails.name, shippingDetails.phone, shippingDetails.cedula, shippingDetails.agency, shippingDetails.city, shippingDetails.state]
+      );
+    }
+    await client.query('COMMIT');
+    return { order, items: pricedItems };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  if (deliveryMethod === 'national') {
-    await pool.query(
-      'INSERT INTO order_shipping_details (order_id, full_name, phone, cedula, agency, city, state) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [order.id, shippingDetails.name, shippingDetails.phone, shippingDetails.cedula, shippingDetails.agency, shippingDetails.city, shippingDetails.state]
-    );
-  }
-  return { order, items: pricedItems };
 };
 
 export const createOrderManually = async ({ adminUserId, clientData, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount = 0, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
@@ -845,18 +883,9 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
     paymentProofUrl,
     deliveryPaymentProofUrl: paymentPlan === 'installments' ? deliveryPaymentProofUrl : null,
     deliveryMethod,
-    shippingDetails
+    shippingDetails,
+    status
   });
-
-  if (status && status !== 'pending') {
-    await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, order.order.id]);
-    order.order.status = status;
-    if (status === 'approved') {
-      for (const item of order.items) {
-        await adjustProductStock(pool, item.product_id, item.size, -Number(item.quantity));
-      }
-    }
-  }
 
   await pool.query(
     'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
@@ -898,7 +927,7 @@ export const addItemToOrder = async (orderId, item, userId) => {
       [orderId, product.id, item.size, Boolean(item.no_dorsal), item.dorsal_number || null, item.dorsal_name || null, item.custom_name || null, item.custom_number || null, quantity, Number(product.price) * (1 - Math.min(100, Math.max(0, Number(product.discount_percent || 0))) / 100)]
     );
 
-    if (order.status === 'approved') {
+    if (order.stock_reserved) {
       await client.query(`
         UPDATE products
         SET stock = GREATEST(0, stock - $1),
@@ -930,10 +959,6 @@ export const addItemToOrder = async (orderId, item, userId) => {
   }
 };
 
-const parseProductStock = (product) => typeof product.stock_by_size === 'string'
-  ? JSON.parse(product.stock_by_size || '{}')
-  : (product.stock_by_size || {});
-
 const adjustProductStock = async (client, productId, size, amount) => {
   await client.query(`
     UPDATE products
@@ -944,6 +969,39 @@ const adjustProductStock = async (client, productId, size, amount) => {
         END
     WHERE id = $2
   `, [amount, productId, size]);
+};
+
+const reserveOrderStock = async (client, items) => {
+  const productIds = [...new Set(items.map((item) => Number(item.product_id)))].sort((a, b) => a - b);
+  const productsResult = await client.query('SELECT * FROM products WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE', [productIds]);
+  const products = new Map(productsResult.rows.map((row) => [Number(row.id), mapProduct(row)]));
+  if (products.size !== productIds.length) throw new Error('Uno de los productos del pedido ya no está disponible.');
+
+  const reservations = new Map();
+  for (const item of items) {
+    const product = products.get(Number(item.product_id));
+    const tracksSizes = Object.keys(product.stock_by_size).length > 0;
+    const size = String(item.size || '').trim().toUpperCase();
+    const key = `${product.id}:${tracksSizes ? size : 'all'}`;
+    const reservation = reservations.get(key) || { product, size, quantity: 0, tracksSizes };
+    reservation.quantity += Number(item.quantity);
+    reservations.set(key, reservation);
+  }
+  for (const reservation of reservations.values()) {
+    const available = reservation.tracksSizes
+      ? Number(reservation.product.stock_by_size[reservation.size] || 0)
+      : Number(reservation.product.stock || 0);
+    if (reservation.quantity > available) {
+      throw new Error(`No hay suficiente stock para la talla ${reservation.size}. Disponibles: ${available}.`);
+    }
+    await adjustProductStock(client, reservation.product.id, reservation.size, -reservation.quantity);
+  }
+};
+
+const releaseOrderStock = async (client, items) => {
+  for (const item of items) {
+    await adjustProductStock(client, item.product_id, item.size, Number(item.quantity));
+  }
 };
 
 const recalculateOrderTotal = async (client, orderId, discountPercent) => {
@@ -978,12 +1036,9 @@ export const updateOrderItem = async (orderId, itemId, item, userId) => {
     if (!product || !product.is_active) throw new Error('El producto seleccionado no está disponible.');
 
     const quantity = Math.max(1, Number(item.quantity) || 1);
-    if (order.status === 'approved') {
+    if (order.stock_reserved) {
       await adjustProductStock(client, oldProduct.id, currentItem.size, Number(currentItem.quantity));
-      const stockBySize = parseProductStock(product);
-      const available = Object.keys(stockBySize).length ? Number(stockBySize[item.size] || 0) : Number(product.stock || 0);
-      if (available < quantity) throw new Error(`No hay suficiente stock para la talla ${item.size}. Disponibles: ${available}.`);
-      await adjustProductStock(client, product.id, item.size, -quantity);
+      await reserveOrderStock(client, [{ product_id: product.id, size: item.size, quantity }]);
     }
 
     const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
@@ -1017,7 +1072,7 @@ export const deleteOrderItem = async (orderId, itemId, userId) => {
     const itemResult = await client.query('SELECT * FROM order_items WHERE id = $1 AND order_id = $2 FOR UPDATE', [itemId, orderId]);
     const item = itemResult.rows[0];
     if (!item) throw new Error('Producto del pedido no encontrado.');
-    if (order.status === 'approved') await adjustProductStock(client, item.product_id, item.size, Number(item.quantity));
+    if (order.stock_reserved) await adjustProductStock(client, item.product_id, item.size, Number(item.quantity));
     await client.query('DELETE FROM order_items WHERE id = $1 AND order_id = $2', [itemId, orderId]);
     const updatedOrder = await recalculateOrderTotal(client, orderId, order.discount_percent);
     await client.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'DELETE_ORDER_ITEM', 'orders', orderId, JSON.stringify({ item_id: itemId, product_id: item.product_id, quantity: item.quantity })]);
@@ -1111,6 +1166,15 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
     }
     const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
     if (!allowedStatuses.has(payload.status)) throw new Error('Estado de pedido inválido.');
+    const orderItems = (await client.query('SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 FOR UPDATE', [orderId])).rows;
+    let stockReserved = Boolean(currentOrder.stock_reserved);
+    if (['cancelled', 'rejected'].includes(payload.status) && stockReserved) {
+      await releaseOrderStock(client, orderItems);
+      stockReserved = false;
+    } else if (!['cancelled', 'rejected'].includes(payload.status) && !stockReserved) {
+      await reserveOrderStock(client, orderItems);
+      stockReserved = true;
+    }
 
     const updated = await client.query(`
       UPDATE orders
@@ -1130,10 +1194,10 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
               WHEN $15::boolean OR (delivery_payment_received_at IS NULL AND ($4::text IS NOT NULL OR $12::numeric > 0)) THEN CURRENT_TIMESTAMP
               ELSE delivery_payment_received_at
             END,
-            delivery_method = $5, shipping_details = $6, status = $7
+            delivery_method = $5, shipping_details = $6, status = $7, stock_reserved = $16
         WHERE id = $8
       RETURNING *
-      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency, firstPaymentChanged, finalPaymentChanged]);
+      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency, firstPaymentChanged, finalPaymentChanged, stockReserved]);
 
     if (payload.delivery_method === 'national') {
       await client.query(`
@@ -1197,17 +1261,32 @@ export const getApprovedOrdersByDateRange = async (from, to) => {
 };
 
 export const deleteOrder = async (orderId, userId) => {
-  const orderResult = await pool.query('SELECT id, status FROM orders WHERE id = $1', [orderId]);
-  if (!orderResult.rows[0]) return false;
-
-  await pool.query('DELETE FROM order_items WHERE order_id = $1', [orderId]);
-  await pool.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
-  await pool.query('DELETE FROM orders WHERE id = $1', [orderId]);
-  await pool.query(
-    'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
-    [userId, 'DELETE_ORDER', 'orders', orderId, JSON.stringify({ status: orderResult.rows[0].status })]
-  );
-  return true;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const orderResult = await client.query('SELECT id, status, stock_reserved FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    const items = (await client.query('SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 FOR UPDATE', [orderId])).rows;
+    if (order.stock_reserved) await releaseOrderStock(client, items);
+    await client.query('DELETE FROM order_items WHERE order_id = $1', [orderId]);
+    await client.query('DELETE FROM order_shipping_details WHERE order_id = $1', [orderId]);
+    await client.query('DELETE FROM orders WHERE id = $1', [orderId]);
+    await client.query(
+      'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
+      [userId, 'DELETE_ORDER', 'orders', orderId, JSON.stringify({ status: order.status })]
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 export const getOrderItemsByOrderId = async (orderId) => {
@@ -1254,41 +1333,53 @@ export const getOrderDetailById = async (orderId, userId = null, isAdmin = false
 export const updateOrderStatus = async (orderId, status, userId) => {
   const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
   if (!allowedStatuses.has(status)) return null;
-  const previousOrder = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-  const previousStatus = previousOrder.rows[0]?.status;
-  if (!previousOrder.rows[0]) return null;
-  await pool.query(`
-    UPDATE orders SET
-      status = $1,
-      payment_received_at = CASE
-        WHEN $1 = ANY($3::varchar[]) AND payment_received_at IS NULL
-          AND (payment_proof_url IS NOT NULL OR first_payment_amount > 0 OR full_payment_amount > 0)
-        THEN CURRENT_TIMESTAMP ELSE payment_received_at
-      END,
-      delivery_payment_received_at = CASE
-        WHEN $1 = ANY($3::varchar[]) AND payment_plan = 'installments' AND delivery_payment_received_at IS NULL
-          AND (delivery_payment_proof_url IS NOT NULL OR delivery_payment_amount > 0)
-        THEN CURRENT_TIMESTAMP ELSE delivery_payment_received_at
-      END
-    WHERE id = $2
-  `, [status, orderId, ['approved', 'preparing', 'ready_pickup', 'shipped', 'delivered']]);
-  if (status === 'approved' && previousStatus !== 'approved') {
-    const itemsRes = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
-    for (const item of itemsRes.rows) {
-      await pool.query(`
-        UPDATE products
-        SET stock = GREATEST(0, stock - $1),
-            stock_by_size = CASE
-              WHEN stock_by_size ? $3 THEN jsonb_set(stock_by_size, ARRAY[$3], to_jsonb(GREATEST(0, COALESCE((stock_by_size ->> $3)::int, 0) - $1)), true)
-              ELSE stock_by_size
-            END
-        WHERE id = $2
-      `, [item.quantity, item.product_id, item.size]);
+  const dbClient = await pool.connect();
+  let previousStatus;
+  let updatedOrder;
+  try {
+    await dbClient.query('BEGIN');
+    const orderResult = await dbClient.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) {
+      await dbClient.query('ROLLBACK');
+      return null;
     }
+    previousStatus = order.status;
+    const items = (await dbClient.query('SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 FOR UPDATE', [orderId])).rows;
+    let stockReserved = Boolean(order.stock_reserved);
+    if (['cancelled', 'rejected'].includes(status) && stockReserved) {
+      await releaseOrderStock(dbClient, items);
+      stockReserved = false;
+    } else if (!['cancelled', 'rejected'].includes(status) && !stockReserved) {
+      await reserveOrderStock(dbClient, items);
+      stockReserved = true;
+    }
+    const result = await dbClient.query(`
+      UPDATE orders SET
+        status = $1,
+        stock_reserved = $4,
+        payment_received_at = CASE
+          WHEN $1 = ANY($3::varchar[]) AND payment_received_at IS NULL
+            AND (payment_proof_url IS NOT NULL OR first_payment_amount > 0 OR full_payment_amount > 0)
+          THEN CURRENT_TIMESTAMP ELSE payment_received_at
+        END,
+        delivery_payment_received_at = CASE
+          WHEN $1 = ANY($3::varchar[]) AND payment_plan = 'installments' AND delivery_payment_received_at IS NULL
+            AND (delivery_payment_proof_url IS NOT NULL OR delivery_payment_amount > 0)
+          THEN CURRENT_TIMESTAMP ELSE delivery_payment_received_at
+        END
+      WHERE id = $2
+      RETURNING *
+    `, [status, orderId, ['approved', 'preparing', 'ready_pickup', 'shipped', 'delivered'], stockReserved]);
+    await dbClient.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER', 'orders', orderId, JSON.stringify({ status })]);
+    await dbClient.query('COMMIT');
+    updatedOrder = mapOrder(result.rows[0]);
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    throw error;
+  } finally {
+    dbClient.release();
   }
-  await pool.query('INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)', [userId, 'UPDATE_ORDER', 'orders', orderId, JSON.stringify({ status })]);
-  const result = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-  const updatedOrder = mapOrder(result.rows[0]);
 
   if (status !== previousStatus) {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [updatedOrder.client_id]);
@@ -1619,7 +1710,7 @@ export const getDashboardStats = async () => {
     FROM orders
     WHERE status = ANY($1::varchar[]) AND ($2::timestamp IS NULL OR created_at >= $2::timestamp)
   `, [confirmedStatuses, metricsParams[0]]);
-  const lowStockRes = await pool.query('SELECT * FROM products WHERE stock = 0');
+  const lowStockRes = await pool.query('SELECT * FROM products WHERE stock <= 5 ORDER BY stock ASC, title ASC');
   const bestSellerRes = await pool.query(`
     SELECT p.title, SUM(oi.quantity) AS qty
     FROM order_items oi
