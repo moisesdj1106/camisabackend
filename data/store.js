@@ -353,6 +353,7 @@ export const initializeStore = async () => {
       model VARCHAR(200) NOT NULL,
       shirt_type VARCHAR(20) NOT NULL CHECK (shirt_type IN ('local', 'visitante', 'alternativa')),
       size VARCHAR(10) NOT NULL,
+      has_print BOOLEAN NOT NULL DEFAULT FALSE,
       dorsal VARCHAR(50),
       printed_name VARCHAR(150),
       deposit_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -362,6 +363,7 @@ export const initializeStore = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query('ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS has_print BOOLEAN NOT NULL DEFAULT FALSE;');
   await pool.query('CREATE INDEX IF NOT EXISTS stock_requests_created_at_idx ON stock_requests (created_at DESC);');
 
   await ensureAutoIncrementColumn('users', 'id');
@@ -660,6 +662,7 @@ const mapStockRequest = (row) => ({
   model: row.model,
   shirt_type: row.shirt_type,
   size: row.size,
+  has_print: row.has_print === true,
   dorsal: row.dorsal,
   printed_name: row.printed_name,
   deposit_amount: Number(row.deposit_amount || 0),
@@ -669,41 +672,104 @@ const mapStockRequest = (row) => ({
   created_at: row.created_at
 });
 
-export const createStockRequest = async (payload) => {
+const normalizeStockRequest = (payload) => {
   const clientName = String(payload.client_name || '').trim();
   const phone = String(payload.phone || '').trim();
   const model = String(payload.model || '').trim();
   const shirtType = String(payload.shirt_type || '').trim().toLowerCase();
   const size = String(payload.size || '').trim().toUpperCase();
+  const hasPrint = payload.has_print === true || String(payload.has_print).toLowerCase() === 'true';
+  const printedName = String(payload.printed_name || '').trim();
+  const dorsal = String(payload.dorsal || '').trim();
   const depositAmount = Number(payload.deposit_amount || 0);
   const depositCurrency = String(payload.deposit_currency || 'USD').trim().toUpperCase();
 
   if (!clientName || !phone || !model || !size) throw new Error('Completa el nombre, teléfono, modelo y talla.');
   if (!['local', 'visitante', 'alternativa'].includes(shirtType)) throw new Error('Selecciona un tipo de camiseta válido.');
   if (!['XS', 'S', 'M', 'L', 'XL', 'XXL'].includes(size)) throw new Error('Selecciona una talla válida.');
+  if (hasPrint && !printedName) throw new Error('Indica el nombre que se estampará en la camiseta.');
+  if (hasPrint && (!/^\d{1,2}$/.test(dorsal) || Number(dorsal) > 99)) throw new Error('Indica un número de dorsal válido entre 0 y 99.');
   if (!Number.isFinite(depositAmount) || depositAmount < 0) throw new Error('El abono debe ser un monto válido y no negativo.');
   if (!['USD', 'BS'].includes(depositCurrency)) throw new Error('Selecciona una moneda válida para el abono.');
 
-  const result = await pool.query(`
-    INSERT INTO stock_requests
-      (client_name, phone, email, model, shirt_type, size, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    RETURNING *
-  `, [
+  return {
     clientName,
     phone,
-    String(payload.email || '').trim() || null,
+    email: String(payload.email || '').trim() || null,
     model,
     shirtType,
     size,
-    String(payload.dorsal || '').trim() || null,
-    String(payload.printed_name || '').trim() || null,
+    hasPrint,
+    dorsal: hasPrint ? dorsal : null,
+    printedName: hasPrint ? printedName : null,
     depositAmount,
     depositCurrency,
-    payload.image_url || null,
-    String(payload.notes || '').trim() || null
+    imageUrl: payload.image_url || null,
+    removeImage: payload.remove_image === true || String(payload.remove_image).toLowerCase() === 'true',
+    notes: String(payload.notes || '').trim() || null
+  };
+};
+
+const stockRequestValues = (request) => [
+  request.clientName,
+  request.phone,
+  request.email,
+  request.model,
+  request.shirtType,
+  request.size,
+  request.hasPrint,
+  request.dorsal,
+  request.printedName,
+  request.depositAmount,
+  request.depositCurrency,
+  request.imageUrl,
+  request.removeImage,
+  request.notes
+];
+
+export const createStockRequest = async (payload) => {
+  const request = normalizeStockRequest(payload);
+  const result = await pool.query(`
+    INSERT INTO stock_requests
+      (client_name, phone, email, model, shirt_type, size, has_print, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    RETURNING *
+  `, [
+    request.clientName,
+    request.phone,
+    request.email,
+    request.model,
+    request.shirtType,
+    request.size,
+    request.hasPrint,
+    request.dorsal,
+    request.printedName,
+    request.depositAmount,
+    request.depositCurrency,
+    request.imageUrl,
+    request.notes
   ]);
   return mapStockRequest(result.rows[0]);
+};
+
+export const updateStockRequest = async (id, payload) => {
+  const request = normalizeStockRequest(payload);
+  const result = await pool.query(`
+    UPDATE stock_requests SET
+      client_name = $1, phone = $2, email = $3, model = $4, shirt_type = $5, size = $6,
+      has_print = $7, dorsal = $8, printed_name = $9, deposit_amount = $10,
+      deposit_currency = $11,
+      image_url = CASE WHEN $13 THEN NULL WHEN $12 IS NOT NULL THEN $12 ELSE image_url END,
+      notes = $14
+    WHERE id = $15
+    RETURNING *
+  `, [...stockRequestValues(request), Number(id)]);
+  return result.rows[0] ? mapStockRequest(result.rows[0]) : null;
+};
+
+export const deleteStockRequest = async (id) => {
+  const result = await pool.query('DELETE FROM stock_requests WHERE id = $1 RETURNING id', [Number(id)]);
+  return result.rowCount > 0;
 };
 
 export const getStockRequests = async ({ from, to } = {}) => {

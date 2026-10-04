@@ -484,13 +484,15 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
     );
     doc.fillColor('#172033').fontSize(9).text(`Modelo: ${request.model}`, textX, cardY + 48, { width: 270 });
     doc.fillColor('#475569').fontSize(8.5).text(
-      `${typeLabels[request.shirt_type] || request.shirt_type} · Talla ${request.size} · Dorsal ${request.dorsal || 'Sin indicar'}`,
+      `${typeLabels[request.shirt_type] || request.shirt_type} · Talla ${request.size} · ${request.has_print ? `Dorsal ${request.dorsal}` : 'Sin estampar'}`,
       textX, cardY + 65, { width: 270 }
     );
-    doc.fillColor('#475569').fontSize(8.5).text(
-      `Nombre estampado: ${request.printed_name || 'Sin indicar'}`,
-      textX, cardY + 81, { width: 270 }
-    );
+    if (request.has_print) {
+      doc.fillColor('#475569').fontSize(8.5).text(
+        `Nombre estampado: ${request.printed_name}`,
+        textX, cardY + 81, { width: 270 }
+      );
+    }
     doc.fillColor('#0f766e').fontSize(9).text(
       `Abono: ${request.deposit_currency === 'BS' ? 'BS ' : '$'}${Number(request.deposit_amount || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       rightX, cardY + 13, { width: 107, align: 'right' }

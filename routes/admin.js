@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStockRequest, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getStockRequests, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStockRequest, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStockRequest, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getStockRequests, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStockRequest, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
 import { createApprovedOrdersPdf, createInvoicePdf, createStockRequestsPdf } from '../utils/pdf.js';
@@ -55,6 +55,42 @@ const readStockRequestRange = (query) => {
   return { from, to };
 };
 
+const handleStockRequestUpload = (req, res, saveRequest, successStatus, operation) => {
+  req.app.locals.upload.single('model_image')(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudo procesar la foto del modelo.' });
+    if (req.file && !['image/jpeg', 'image/png'].includes(req.file.mimetype)) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'La foto debe estar en formato JPG o PNG.' });
+    }
+    if (req.file && req.file.size > 8 * 1024 * 1024) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'La foto del modelo no puede superar los 8 MB.' });
+    }
+    let imageUrl = null;
+    try {
+      if (req.file) {
+        imageUrl = await uploadProductImage(req.file.path, req.file.originalname);
+        if (!imageUrl) {
+          if (process.env.NODE_ENV === 'production') {
+            fs.unlink(req.file.path, () => {});
+            return res.status(503).json({ error: 'Cloudinary no está configurado para guardar fotos en producción.' });
+          }
+          imageUrl = `/uploads/${req.file.filename}`;
+        } else {
+          fs.unlink(req.file.path, () => {});
+        }
+      }
+      const stockRequest = await saveRequest({ ...req.body, image_url: imageUrl });
+      if (!stockRequest) return res.status(404).json({ error: 'No se encontró el apartado solicitado.' });
+      return res.status(successStatus).json(stockRequest);
+    } catch (error) {
+      if (req.file && imageUrl !== `/uploads/${req.file.filename}`) fs.unlink(req.file.path, () => {});
+      console.error(`Error ${operation} solicitud de stock: ${error.message}`, error.code || '');
+      return res.status(error.code ? 500 : 400).json({ error: error.message || `No se pudo ${operation} la solicitud.` });
+    }
+  });
+};
+
 adminRouter.get('/stock-requests', authMiddleware, adminOnly, async (req, res) => {
   let range;
   try {
@@ -72,34 +108,28 @@ adminRouter.get('/stock-requests', authMiddleware, adminOnly, async (req, res) =
 });
 
 adminRouter.post('/stock-requests', authMiddleware, adminOnly, (req, res) => {
-  req.app.locals.upload.single('model_image')(req, res, async (uploadError) => {
-    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudo procesar la foto del modelo.' });
-    if (req.file && !['image/jpeg', 'image/png'].includes(req.file.mimetype)) {
-      fs.unlink(req.file.path, () => {});
-      return res.status(400).json({ error: 'La foto debe estar en formato JPG o PNG.' });
-    }
-    let imageUrl = null;
-    try {
-      if (req.file) {
-        imageUrl = await uploadProductImage(req.file.path, req.file.originalname);
-        if (!imageUrl) {
-          if (process.env.NODE_ENV === 'production') {
-            fs.unlink(req.file.path, () => {});
-            return res.status(503).json({ error: 'Cloudinary no está configurado para guardar fotos en producción.' });
-          }
-          imageUrl = `/uploads/${req.file.filename}`;
-        } else {
-          fs.unlink(req.file.path, () => {});
-        }
-      }
-      const stockRequest = await createStockRequest({ ...req.body, image_url: imageUrl });
-      res.status(201).json(stockRequest);
-    } catch (error) {
-      if (req.file && imageUrl !== `/uploads/${req.file.filename}`) fs.unlink(req.file.path, () => {});
-      console.error(`Error creando solicitud de stock: ${error.message}`, error.code || '');
-      res.status(error.code ? 500 : 400).json({ error: error.message || 'No se pudo registrar la solicitud.' });
-    }
-  });
+  handleStockRequestUpload(req, res, createStockRequest, 201, 'creando');
+});
+
+adminRouter.put('/stock-requests/:id', authMiddleware, adminOnly, (req, res) => {
+  if (!/^\d+$/.test(req.params.id) || Number(req.params.id) < 1) {
+    return res.status(400).json({ error: 'El identificador del apartado no es válido.' });
+  }
+  handleStockRequestUpload(req, res, (payload) => updateStockRequest(req.params.id, payload), 200, 'actualizando');
+});
+
+adminRouter.delete('/stock-requests/:id', authMiddleware, adminOnly, async (req, res) => {
+  if (!/^\d+$/.test(req.params.id) || Number(req.params.id) < 1) {
+    return res.status(400).json({ error: 'El identificador del apartado no es válido.' });
+  }
+  try {
+    const deleted = await deleteStockRequest(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'No se encontró el apartado solicitado.' });
+    return res.status(204).end();
+  } catch (error) {
+    console.error(`Error eliminando solicitud de stock: ${error.message}`, error.code || '');
+    return res.status(500).json({ error: 'No se pudo eliminar el apartado.' });
+  }
 });
 
 adminRouter.get('/stock-requests/pdf', authMiddleware, adminOnly, async (req, res) => {
