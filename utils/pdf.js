@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { uploadDir } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -365,6 +366,157 @@ export const createApprovedOrdersPdf = async (orders, dateRange = null) => {
     doc.y += 78;
   }
 
+  drawPageFooter();
+  doc.end();
+  return await new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+};
+
+const loadStockRequestPhoto = async (imageUrl) => {
+  if (!imageUrl) return null;
+  try {
+    if (/^https:\/\//i.test(imageUrl)) {
+      const url = new URL(imageUrl);
+      if (url.hostname !== 'res.cloudinary.com') throw new Error('La foto remota no pertenece al almacenamiento permitido.');
+      url.pathname = url.pathname.replace('/image/upload/', '/image/upload/f_png/');
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
+        throw new Error(`No se pudo descargar la foto del modelo (HTTP ${response.status}).`);
+      }
+      const contentLength = Number(response.headers.get('content-length') || 0);
+      if (contentLength > 8 * 1024 * 1024) throw new Error('La foto del modelo supera el tamaño permitido para el PDF.');
+      const image = Buffer.from(await response.arrayBuffer());
+      if (image.length > 8 * 1024 * 1024) throw new Error('La foto del modelo supera el tamaño permitido para el PDF.');
+      return image;
+    }
+
+    if (!/^\/?uploads\//.test(imageUrl)) throw new Error('La ruta de la foto local no es válida.');
+    const relativePath = imageUrl.replace(/^\/?uploads\//, '');
+    const imagePath = path.resolve(uploadDir, relativePath);
+    const relativeToUploads = path.relative(uploadDir, imagePath);
+    if (relativeToUploads.startsWith('..') || path.isAbsolute(relativeToUploads)) {
+      throw new Error('La ruta de la foto local está fuera del directorio de imágenes.');
+    }
+    return fs.existsSync(imagePath) ? fs.readFileSync(imagePath) : null;
+  } catch (error) {
+    console.warn(`No se pudo incluir la foto de la solicitud de stock en el PDF: ${error.message}`);
+    return null;
+  }
+};
+
+export const createStockRequestsPdf = async (requests, dateRange = {}) => {
+  const doc = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+  const logoPath = findLogoPath();
+  const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
+  const photos = await Promise.all(requests.map((request) => loadStockRequestPhoto(request.image_url)));
+  const contentX = 36;
+  const contentWidth = 523;
+  const footerY = 755;
+  let pageNumber = 1;
+  const totalDeposits = requests.reduce((totals, request) => {
+    totals[request.deposit_currency] = (totals[request.deposit_currency] || 0) + Number(request.deposit_amount || 0);
+    return totals;
+  }, { USD: 0, BS: 0 });
+
+  const drawPageHeader = () => {
+    doc.y = 36;
+    doc.roundedRect(contentX, 36, contentWidth, 62, 10).fill('#0f2d52');
+    doc.fillColor('#ffffff').fontSize(16).text('PEDIDOS POR ENCARGO', contentX + 18, 48);
+    doc.fillColor('#cfe4ff').fontSize(8.5).text(
+      dateRange.from || dateRange.to
+        ? `Solicitudes registradas${dateRange.from ? ` desde ${dateRange.from}` : ''}${dateRange.to ? ` hasta ${dateRange.to}` : ''}`
+        : 'Todas las solicitudes registradas',
+      contentX + 18, 73, { width: 300 }
+    );
+    doc.fillColor('#dbeafe').fontSize(8).text(
+      `${requests.length} solicitud(es) · ${new Date().toLocaleDateString('es-VE')}`,
+      contentX + 330, 74, { width: 175, align: 'right' }
+    );
+    doc.y = 110;
+  };
+
+  const drawPageFooter = () => {
+    doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
+    if (logoImage) doc.image(logoImage, contentX, footerY - 2, { fit: [52, 36], align: 'center', valign: 'center' });
+    doc.fontSize(8).fillColor('#64748b').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', contentX + 62, footerY + 5);
+    doc.text('Control interno de mercancía por encargo · Abonos registrados aparte', contentX + 62, footerY + 19);
+    doc.text(`Página ${pageNumber}`, contentX, footerY + 19, { width: contentWidth, align: 'right' });
+  };
+
+  const ensureSpace = (height) => {
+    if (doc.y + height <= footerY - 18) return;
+    drawPageFooter();
+    doc.addPage();
+    pageNumber += 1;
+    drawPageHeader();
+  };
+
+  const typeLabels = { local: 'Local', visitante: 'Visitante', alternativa: 'Alternativa' };
+  drawPageHeader();
+  requests.forEach((request, index) => {
+    const notes = String(request.notes || '');
+    const notesHeight = notes ? Math.min(30, doc.heightOfString(notes, { width: 390, fontSize: 8 })) : 0;
+    const cardHeight = 112 + notesHeight;
+    ensureSpace(cardHeight + 8);
+    const cardY = doc.y;
+    doc.roundedRect(contentX, cardY, contentWidth, cardHeight, 8)
+      .fill(index % 2 === 0 ? '#f8fbff' : '#f1f6fc')
+      .strokeColor('#dbe5f1').stroke();
+    doc.roundedRect(contentX, cardY, 7, cardHeight, 3).fill('#2563eb');
+    const imageX = contentX + 16;
+    const imageY = cardY + 14;
+    const photo = photos[index];
+    if (photo) {
+      doc.image(photo, imageX, imageY, { fit: [82, 82], align: 'center', valign: 'center' });
+    } else {
+      doc.roundedRect(imageX, imageY, 82, 82, 5).fill('#e2e8f0');
+      doc.fillColor('#64748b').fontSize(8).text('Sin foto', imageX, imageY + 35, { width: 82, align: 'center' });
+    }
+    const textX = contentX + 112;
+    const rightX = contentX + 404;
+    doc.fillColor('#0f2d52').fontSize(11).text(request.client_name, textX, cardY + 13, { width: 220 });
+    doc.fillColor('#64748b').fontSize(8.5).text(
+      `${request.phone}${request.email ? ` · ${request.email}` : ''}`,
+      textX, cardY + 30, { width: 270 }
+    );
+    doc.fillColor('#172033').fontSize(9).text(`Modelo: ${request.model}`, textX, cardY + 48, { width: 270 });
+    doc.fillColor('#475569').fontSize(8.5).text(
+      `${typeLabels[request.shirt_type] || request.shirt_type} · Talla ${request.size} · Dorsal ${request.dorsal || 'Sin indicar'}`,
+      textX, cardY + 65, { width: 270 }
+    );
+    doc.fillColor('#475569').fontSize(8.5).text(
+      `Nombre estampado: ${request.printed_name || 'Sin indicar'}`,
+      textX, cardY + 81, { width: 270 }
+    );
+    doc.fillColor('#0f766e').fontSize(9).text(
+      `Abono: ${request.deposit_currency === 'BS' ? 'BS ' : '$'}${Number(request.deposit_amount || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      rightX, cardY + 13, { width: 107, align: 'right' }
+    );
+    const createdAt = request.created_at ? new Date(request.created_at) : null;
+    doc.fillColor('#64748b').fontSize(8).text(
+      createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleDateString('es-VE') : 'Fecha no disponible',
+      rightX, cardY + 30, { width: 107, align: 'right' }
+    );
+    if (notes) {
+      doc.fillColor('#64748b').fontSize(8).text(`Nota: ${notes}`, textX, cardY + 98, { width: 390, height: 30, ellipsis: true });
+    }
+    doc.y = cardY + cardHeight + 8;
+  });
+
+  if (!requests.length) {
+    doc.roundedRect(contentX, doc.y, contentWidth, 60, 8).fill('#f8fbff').strokeColor('#dbe5f1').stroke();
+    doc.fillColor('#475569').fontSize(11).text('No hay solicitudes registradas para este período.', contentX + 20, doc.y + 23, { width: contentWidth - 40, align: 'center' });
+    doc.y += 68;
+  }
+  ensureSpace(28);
+  doc.moveDown(0.4);
+  doc.fillColor('#0f2d52').fontSize(9).text(
+    `Abonos registrados aparte: $${totalDeposits.USD.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · BS ${totalDeposits.BS.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    contentX, doc.y, { width: contentWidth, align: 'right' }
+  );
   drawPageFooter();
   doc.end();
   return await new Promise((resolve) => {

@@ -344,6 +344,25 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE store_content ADD COLUMN IF NOT EXISTS slot VARCHAR(20) NOT NULL DEFAULT 'gallery';`);
   await pool.query(`UPDATE store_content SET slot = 'banner' WHERE type = 'banner' AND slot = 'gallery';`);
   await pool.query(`UPDATE store_content SET slot = 'video' WHERE type = 'video' AND slot = 'gallery';`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stock_requests (
+      id SERIAL PRIMARY KEY,
+      client_name VARCHAR(150) NOT NULL,
+      phone VARCHAR(50) NOT NULL,
+      email VARCHAR(150),
+      model VARCHAR(200) NOT NULL,
+      shirt_type VARCHAR(20) NOT NULL CHECK (shirt_type IN ('local', 'visitante', 'alternativa')),
+      size VARCHAR(10) NOT NULL,
+      dorsal VARCHAR(50),
+      printed_name VARCHAR(150),
+      deposit_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      deposit_currency VARCHAR(3) NOT NULL DEFAULT 'USD' CHECK (deposit_currency IN ('USD', 'BS')),
+      image_url TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS stock_requests_created_at_idx ON stock_requests (created_at DESC);');
 
   await ensureAutoIncrementColumn('users', 'id');
   await ensureAutoIncrementColumn('products', 'id');
@@ -631,6 +650,75 @@ export const updateStoreContent = async (id, payload) => {
 
 export const deleteStoreContent = async (id) => {
   await pool.query('DELETE FROM store_content WHERE id = $1', [id]);
+};
+
+const mapStockRequest = (row) => ({
+  id: Number(row.id),
+  client_name: row.client_name,
+  phone: row.phone,
+  email: row.email,
+  model: row.model,
+  shirt_type: row.shirt_type,
+  size: row.size,
+  dorsal: row.dorsal,
+  printed_name: row.printed_name,
+  deposit_amount: Number(row.deposit_amount || 0),
+  deposit_currency: row.deposit_currency,
+  image_url: row.image_url,
+  notes: row.notes,
+  created_at: row.created_at
+});
+
+export const createStockRequest = async (payload) => {
+  const clientName = String(payload.client_name || '').trim();
+  const phone = String(payload.phone || '').trim();
+  const model = String(payload.model || '').trim();
+  const shirtType = String(payload.shirt_type || '').trim().toLowerCase();
+  const size = String(payload.size || '').trim().toUpperCase();
+  const depositAmount = Number(payload.deposit_amount || 0);
+  const depositCurrency = String(payload.deposit_currency || 'USD').trim().toUpperCase();
+
+  if (!clientName || !phone || !model || !size) throw new Error('Completa el nombre, teléfono, modelo y talla.');
+  if (!['local', 'visitante', 'alternativa'].includes(shirtType)) throw new Error('Selecciona un tipo de camiseta válido.');
+  if (!['XS', 'S', 'M', 'L', 'XL', 'XXL'].includes(size)) throw new Error('Selecciona una talla válida.');
+  if (!Number.isFinite(depositAmount) || depositAmount < 0) throw new Error('El abono debe ser un monto válido y no negativo.');
+  if (!['USD', 'BS'].includes(depositCurrency)) throw new Error('Selecciona una moneda válida para el abono.');
+
+  const result = await pool.query(`
+    INSERT INTO stock_requests
+      (client_name, phone, email, model, shirt_type, size, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING *
+  `, [
+    clientName,
+    phone,
+    String(payload.email || '').trim() || null,
+    model,
+    shirtType,
+    size,
+    String(payload.dorsal || '').trim() || null,
+    String(payload.printed_name || '').trim() || null,
+    depositAmount,
+    depositCurrency,
+    payload.image_url || null,
+    String(payload.notes || '').trim() || null
+  ]);
+  return mapStockRequest(result.rows[0]);
+};
+
+export const getStockRequests = async ({ from, to } = {}) => {
+  const values = [];
+  let whereClause = '';
+  if (from) {
+    values.push(from);
+    whereClause += ` WHERE created_at >= $${values.length}::date`;
+  }
+  if (to) {
+    values.push(to);
+    whereClause += `${whereClause ? ' AND' : ' WHERE'} created_at < ($${values.length}::date + INTERVAL '1 day')`;
+  }
+  const result = await pool.query(`SELECT * FROM stock_requests${whereClause} ORDER BY created_at DESC, id DESC`, values);
+  return result.rows.map(mapStockRequest);
 };
 
 const parseDorsalOptions = (value) => {

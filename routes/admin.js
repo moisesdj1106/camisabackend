@@ -2,10 +2,10 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStockRequest, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getStockRequests, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
-import { createApprovedOrdersPdf, createInvoicePdf } from '../utils/pdf.js';
+import { createApprovedOrdersPdf, createInvoicePdf, createStockRequestsPdf } from '../utils/pdf.js';
 import { isCloudinaryConfigured, uploadProductImage, uploadProof, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +38,90 @@ const parseRequestValue = (value, fallback = null) => {
   if (!value) return fallback;
   return JSON.parse(value);
 };
+
+const isValidDate = (value) => {
+  if (!value) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
+
+const readStockRequestRange = (query) => {
+  const from = query.from ? String(query.from) : null;
+  const to = query.to ? String(query.to) : null;
+  if (!isValidDate(from) || !isValidDate(to) || (from && to && from > to)) {
+    throw new Error('Indica un rango de fechas válido, con inicio anterior al fin.');
+  }
+  return { from, to };
+};
+
+adminRouter.get('/stock-requests', authMiddleware, adminOnly, async (req, res) => {
+  let range;
+  try {
+    range = readStockRequestRange(req.query);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'No se pudieron cargar las solicitudes de stock.' });
+    return;
+  }
+  try {
+    res.json(await getStockRequests(range));
+  } catch (error) {
+    console.error(`Error cargando solicitudes de stock: ${error.message}`, error.code || '');
+    res.status(500).json({ error: 'No se pudieron cargar las solicitudes de stock.' });
+  }
+});
+
+adminRouter.post('/stock-requests', authMiddleware, adminOnly, (req, res) => {
+  req.app.locals.upload.single('model_image')(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message || 'No se pudo procesar la foto del modelo.' });
+    if (req.file && !['image/jpeg', 'image/png'].includes(req.file.mimetype)) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'La foto debe estar en formato JPG o PNG.' });
+    }
+    let imageUrl = null;
+    try {
+      if (req.file) {
+        imageUrl = await uploadProductImage(req.file.path, req.file.originalname);
+        if (!imageUrl) {
+          if (process.env.NODE_ENV === 'production') {
+            fs.unlink(req.file.path, () => {});
+            return res.status(503).json({ error: 'Cloudinary no está configurado para guardar fotos en producción.' });
+          }
+          imageUrl = `/uploads/${req.file.filename}`;
+        } else {
+          fs.unlink(req.file.path, () => {});
+        }
+      }
+      const stockRequest = await createStockRequest({ ...req.body, image_url: imageUrl });
+      res.status(201).json(stockRequest);
+    } catch (error) {
+      if (req.file && imageUrl !== `/uploads/${req.file.filename}`) fs.unlink(req.file.path, () => {});
+      console.error(`Error creando solicitud de stock: ${error.message}`, error.code || '');
+      res.status(error.code ? 500 : 400).json({ error: error.message || 'No se pudo registrar la solicitud.' });
+    }
+  });
+});
+
+adminRouter.get('/stock-requests/pdf', authMiddleware, adminOnly, async (req, res) => {
+  let range;
+  try {
+    range = readStockRequestRange(req.query);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Indica un rango de fechas válido.' });
+    return;
+  }
+  try {
+    const requests = await getStockRequests(range);
+    const pdfBuffer = await createStockRequestsPdf(requests, range);
+    const rangeName = range.from && range.to ? `-${range.from}-${range.to}` : '';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="solicitudes-de-stock${rangeName}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error(`Error generando PDF de solicitudes de stock: ${error.message}`, error.code || '');
+    res.status(500).json({ error: 'No se pudo generar el PDF de solicitudes.' });
+  }
+});
 
 adminRouter.put('/products/discounts', authMiddleware, adminOnly, async (req, res) => {
   const discount = Number(req.body?.discount_percent);
