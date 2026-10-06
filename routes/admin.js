@@ -2,10 +2,10 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addAuditLog, addItemToOrder, createClub, createSalesClosure, createStockRequest, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStockRequest, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getStockRequests, getUserById, getUsersAdmin, listClubs, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStockRequest, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
+import { addAuditLog, addItemToOrder, createCashWithdrawal, createClub, createSalesClosure, createStockRequest, createStoreContent, createUser, deleteClub, deleteOrder, deleteOrderItem, deleteStockRequest, deleteStoreContent, deleteUserAdmin, findUserByEmail, getAuditLogs, getCashWithdrawals, getDashboardStats, getDailyClosureReport, getExchangeRate, getOrdersAdmin, getApprovedOrdersByDateRange, getSalesClosureSummary, getStockRequests, getUserById, getUsersAdmin, listClubs, listProducts, listStoreContent, openDailyClosure, resetRevenueMetrics, setExchangeRate, updateAllProductDiscounts, updateClub, updateOrderAdmin, updateOrderDiscount, updateOrderItem, updateOrderStatus, updateStockRequest, updateStoreContent, updateUserAdmin, createOrderManually } from '../data/store.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
-import { createApprovedOrdersPdf, createInvoicePdf, createStockRequestsPdf } from '../utils/pdf.js';
+import { createApprovedOrdersPdf, createInventoryPdf, createInvoicePdf, createStockRequestsPdf } from '../utils/pdf.js';
 import { isCloudinaryConfigured, uploadProductImage, uploadProof, uploadStoreContent } from '../utils/cloudinary.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -150,6 +150,45 @@ adminRouter.get('/stock-requests/pdf', authMiddleware, adminOnly, async (req, re
   } catch (error) {
     console.error(`Error generando PDF de solicitudes de stock: ${error.message}`, error.code || '');
     res.status(500).json({ error: 'No se pudo generar el PDF de solicitudes.' });
+  }
+});
+
+adminRouter.get('/cash-withdrawals', authMiddleware, adminOnly, async (_req, res) => {
+  try {
+    res.json(await getCashWithdrawals());
+  } catch (error) {
+    console.error(`Error cargando retiros: ${error.message}`, error.code || '');
+    res.status(500).json({ error: 'No se pudieron cargar los retiros.' });
+  }
+});
+
+adminRouter.post('/cash-withdrawals', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const withdrawal = await createCashWithdrawal({
+      amount: req.body?.amount_usd,
+      concept: req.body?.concept,
+      userId: req.user.id
+    });
+    res.status(201).json(withdrawal);
+  } catch (error) {
+    if (error.code) {
+      console.error(`Error guardando retiro: ${error.message}`, error.code);
+      return res.status(500).json({ error: 'No se pudo registrar el retiro.' });
+    }
+    res.status(400).json({ error: error.message || 'No se pudo registrar el retiro.' });
+  }
+});
+
+adminRouter.get('/inventory/pdf', authMiddleware, adminOnly, async (_req, res) => {
+  try {
+    const products = await listProducts();
+    const pdfBuffer = await createInventoryPdf(products);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="inventario-camisetas.pdf"');
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error(`Error generando PDF de inventario: ${error.message}`, error.code || '');
+    res.status(500).json({ error: 'No se pudo generar el PDF del inventario.' });
   }
 });
 

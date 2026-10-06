@@ -373,14 +373,18 @@ export const createApprovedOrdersPdf = async (orders, dateRange = null) => {
   });
 };
 
-const loadStockRequestPhoto = async (imageUrl) => {
+const loadStoredImage = async (imageUrl) => {
   if (!imageUrl) return null;
   try {
     if (/^https:\/\//i.test(imageUrl)) {
       const url = new URL(imageUrl);
-      if (url.hostname !== 'res.cloudinary.com') throw new Error('La foto remota no pertenece al almacenamiento permitido.');
-      url.pathname = url.pathname.replace('/image/upload/', '/image/upload/f_png/');
-      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!['res.cloudinary.com', 'images.unsplash.com'].includes(url.hostname)) {
+        throw new Error('La foto remota no pertenece a un almacenamiento permitido.');
+      }
+      if (url.hostname === 'res.cloudinary.com') {
+        url.pathname = url.pathname.replace('/image/upload/', '/image/upload/f_png/');
+      }
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000), redirect: 'error' });
       if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
         throw new Error(`No se pudo descargar la foto del modelo (HTTP ${response.status}).`);
       }
@@ -400,9 +404,105 @@ const loadStockRequestPhoto = async (imageUrl) => {
     }
     return fs.existsSync(imagePath) ? fs.readFileSync(imagePath) : null;
   } catch (error) {
-    console.warn(`No se pudo incluir la foto de la solicitud de stock en el PDF: ${error.message}`);
+    console.warn(`No se pudo incluir la foto en el PDF: ${error.message}`);
     return null;
   }
+};
+
+export const createInventoryPdf = async (products) => {
+  const doc = new PDFDocument({ size: 'A4', margin: 36 });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+  const logoPath = findLogoPath();
+  const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
+  const photos = await Promise.all(products.map((product) => loadStoredImage(product.image_url)));
+  const contentX = 36;
+  const contentWidth = 523;
+  const footerY = 755;
+  let pageNumber = 1;
+  let totalUnits = 0;
+
+  const drawPageHeader = () => {
+    doc.y = 36;
+    doc.roundedRect(contentX, 36, contentWidth, 66, 10).fill('#0f2d52');
+    doc.fillColor('#ffffff').fontSize(17).text('INVENTARIO DE CAMISETAS', contentX + 18, 49);
+    doc.fillColor('#cfe4ff').fontSize(9).text(
+      `Stock registrado · ${new Date().toLocaleDateString('es-VE')}`,
+      contentX + 18, 76
+    );
+    doc.fillColor('#dbeafe').fontSize(8).text(
+      `${products.length} modelo(s)`,
+      contentX + 390, 77, { width: 115, align: 'right' }
+    );
+    doc.y = 114;
+  };
+
+  const drawPageFooter = () => {
+    doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
+    if (logoImage) doc.image(logoImage, contentX, footerY - 2, { fit: [52, 36], align: 'center', valign: 'center' });
+    doc.fontSize(8).fillColor('#64748b').text('MDJ SOCCER · Control interno de inventario', contentX + 62, footerY + 5);
+    doc.text(`Página ${pageNumber}`, contentX, footerY + 19, { width: contentWidth, align: 'right' });
+  };
+
+  const ensureSpace = (height) => {
+    if (doc.y + height <= footerY - 18) return;
+    drawPageFooter();
+    doc.addPage();
+    pageNumber += 1;
+    drawPageHeader();
+  };
+
+  drawPageHeader();
+  products.forEach((product, index) => {
+    const sizeEntries = Object.entries(product.stock_by_size || {})
+      .filter(([, quantity]) => Number(quantity) > 0);
+    const stockTotal = sizeEntries.length
+      ? sizeEntries.reduce((sum, [, quantity]) => sum + Number(quantity), 0)
+      : Math.max(0, Number(product.stock) || 0);
+    totalUnits += stockTotal;
+    const sizeSummary = sizeEntries.length
+      ? sizeEntries.map(([size, quantity]) => `${size}: ${Number(quantity)}`).join('  ·  ')
+      : 'Sin desglose por talla';
+    const cardHeight = 94;
+    ensureSpace(cardHeight + 8);
+    const cardY = doc.y;
+    doc.roundedRect(contentX, cardY, contentWidth, cardHeight, 8)
+      .fill(index % 2 === 0 ? '#f8fbff' : '#f1f6fc')
+      .strokeColor('#dbe5f1').stroke();
+    doc.roundedRect(contentX, cardY, 7, cardHeight, 3).fill('#2563eb');
+    const imageX = contentX + 16;
+    const imageY = cardY + 14;
+    if (photos[index]) {
+      doc.image(photos[index], imageX, imageY, { fit: [66, 66], align: 'center', valign: 'center' });
+    } else {
+      doc.roundedRect(imageX, imageY, 66, 66, 5).fill('#e2e8f0');
+      doc.fillColor('#64748b').fontSize(7.5).text('Sin foto', imageX, imageY + 29, { width: 66, align: 'center' });
+    }
+    const textX = contentX + 96;
+    const textWidth = contentWidth - 116;
+    doc.fillColor('#0f2d52').fontSize(11).text(String(product.title || 'Camiseta sin nombre'), textX, cardY + 13, { width: textWidth, height: 19, ellipsis: true });
+    doc.fillColor('#475569').fontSize(8.5).text(
+      `${productTypeLabel(product.type, product.title)}${product.club?.name ? ` · ${product.club.name}` : ''}`,
+      textX, cardY + 37, { width: textWidth }
+    );
+    doc.fillColor('#172033').fontSize(8.5).text(`Tallas: ${sizeSummary}`, textX, cardY + 55, { width: textWidth, height: 14, ellipsis: true });
+    doc.fillColor('#0f766e').fontSize(9.5).text(
+      `Disponibles: ${stockTotal}`,
+      textX, cardY + 74, { width: textWidth }
+    );
+    doc.y = cardY + cardHeight + 8;
+  });
+
+  ensureSpace(58);
+  doc.roundedRect(contentX, doc.y, contentWidth, 50, 8).fill('#ecfdf5').strokeColor('#86efac').stroke();
+  doc.fillColor('#166534').fontSize(10).text('TOTAL DE CAMISETAS DISPONIBLES', contentX + 16, doc.y + 10);
+  doc.fillColor('#14532d').fontSize(17).text(`${totalUnits} unidades`, contentX + 16, doc.y + 25);
+  doc.y += 60;
+  drawPageFooter();
+  doc.end();
+  return await new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
 };
 
 export const createStockRequestsPdf = async (requests, dateRange = {}) => {
@@ -411,7 +511,7 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
   doc.on('data', (chunk) => chunks.push(chunk));
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
-  const photos = await Promise.all(requests.map((request) => loadStockRequestPhoto(request.image_url)));
+  const photos = await Promise.all(requests.map((request) => loadStoredImage(request.image_url)));
   const contentX = 36;
   const contentWidth = 523;
   const footerY = 755;
@@ -478,8 +578,11 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
       textX, cardY + 30, { width: 270 }
     );
     doc.fillColor('#172033').fontSize(9).text(`Modelo: ${request.model}`, textX, cardY + 48, { width: 270 });
+    const sizeSummary = Object.entries(request.size_quantities || { [request.size]: 1 })
+      .map(([size, quantity]) => `${size}: ${quantity}`)
+      .join(' · ');
     doc.fillColor('#475569').fontSize(8.5).text(
-      `${typeLabels[request.shirt_type] || request.shirt_type} · Talla ${request.size} · ${request.has_print ? `Dorsal ${request.dorsal}` : 'Sin estampar'}`,
+      `${typeLabels[request.shirt_type] || request.shirt_type} · ${sizeSummary} · ${request.has_print ? `Dorsal ${request.dorsal}` : 'Sin estampar'}`,
       textX, cardY + 65, { width: 270 }
     );
     if (request.has_print) {

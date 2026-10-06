@@ -69,6 +69,7 @@ const normalizeProductPayload = (payload = {}) => {
   const stockBySize = parseStockBySize(payload.stock_by_size);
   return {
     ...payload,
+    ...(payload.description !== undefined ? { description: String(payload.description ?? '') } : {}),
     image_url: primaryImage,
     image_urls: imageUrls,
     stock_by_size: stockBySize,
@@ -218,6 +219,54 @@ export const resetRevenueMetrics = async () => {
   return resetAt;
 };
 
+export const getCashWithdrawals = async () => {
+  const result = await pool.query(`
+    SELECT id, amount_usd, concept, created_at
+    FROM cash_withdrawals
+    ORDER BY created_at DESC, id DESC
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    amount_usd: Number(row.amount_usd),
+    concept: row.concept,
+    created_at: row.created_at
+  }));
+};
+
+export const createCashWithdrawal = async ({ amount, concept, userId }) => {
+  const amountUsd = Number(amount);
+  const normalizedConcept = String(concept || '').trim();
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error('El monto del retiro debe ser mayor que cero.');
+  if (!normalizedConcept || normalizedConcept.length > 500) throw new Error('Indica un concepto de hasta 500 caracteres.');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(`
+      INSERT INTO cash_withdrawals (amount_usd, concept, user_id)
+      VALUES ($1, $2, $3)
+      RETURNING id, amount_usd, concept, created_at
+    `, [amountUsd, normalizedConcept, userId]);
+    const row = result.rows[0];
+    await client.query(
+      'INSERT INTO audit_logs (user_id, action, table_name, record_id, changes) VALUES ($1, $2, $3, $4, $5)',
+      [userId, 'CREATE_CASH_WITHDRAWAL', 'cash_withdrawals', row.id, JSON.stringify({ amount_usd: Number(row.amount_usd), concept: row.concept })]
+    );
+    await client.query('COMMIT');
+    return {
+      id: Number(row.id),
+      amount_usd: Number(row.amount_usd),
+      concept: row.concept,
+      created_at: row.created_at
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 export const listClubs = async () => {
   const result = await pool.query('SELECT * FROM clubs ORDER BY id ASC');
   return result.rows.map((row) => ({ id: Number(row.id), name: row.name, country: row.country, logo_url: row.logo_url, category: row.category || 'club' }));
@@ -308,6 +357,15 @@ export const initializeStore = async () => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_withdrawals (
+      id SERIAL PRIMARY KEY,
+      amount_usd NUMERIC(12,2) NOT NULL CHECK (amount_usd > 0),
+      concept VARCHAR(500) NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
 
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;`);
@@ -316,6 +374,8 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_no_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_catalog_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS allow_custom_dorsal BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE products ALTER COLUMN description DROP DEFAULT;`);
+  await pool.query(`ALTER TABLE products ALTER COLUMN description TYPE TEXT USING description::TEXT;`);
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS category VARCHAR(20) NOT NULL DEFAULT 'club';`);
 
@@ -353,6 +413,7 @@ export const initializeStore = async () => {
       model VARCHAR(200) NOT NULL,
       shirt_type VARCHAR(20) NOT NULL CHECK (shirt_type IN ('local', 'visitante', 'alternativa')),
       size VARCHAR(10) NOT NULL,
+      size_quantities JSONB NOT NULL DEFAULT '{}'::jsonb,
       has_print BOOLEAN NOT NULL DEFAULT FALSE,
       dorsal VARCHAR(50),
       printed_name VARCHAR(150),
@@ -363,6 +424,7 @@ export const initializeStore = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query(`ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS size_quantities JSONB NOT NULL DEFAULT '{}'::jsonb;`);
   await pool.query('ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS has_print BOOLEAN NOT NULL DEFAULT FALSE;');
   await pool.query('CREATE INDEX IF NOT EXISTS stock_requests_created_at_idx ON stock_requests (created_at DESC);');
 
@@ -654,6 +716,23 @@ export const deleteStoreContent = async (id) => {
   await pool.query('DELETE FROM store_content WHERE id = $1', [id]);
 };
 
+const parseStockRequestSizes = (value, legacySize) => {
+  let sizes = value;
+  if (typeof sizes === 'string') {
+    try {
+      sizes = JSON.parse(sizes);
+    } catch (error) {
+      sizes = {};
+    }
+  }
+  if (!sizes || typeof sizes !== 'object' || Array.isArray(sizes)) sizes = {};
+  const normalized = Object.fromEntries(['XS', 'S', 'M', 'L', 'XL', 'XXL']
+    .map((size) => [size, Number(sizes[size]) || 0])
+    .filter(([, quantity]) => Number.isSafeInteger(quantity) && quantity > 0));
+  if (!Object.keys(normalized).length && legacySize) normalized[legacySize] = 1;
+  return normalized;
+};
+
 const mapStockRequest = (row) => ({
   id: Number(row.id),
   client_name: row.client_name,
@@ -662,6 +741,7 @@ const mapStockRequest = (row) => ({
   model: row.model,
   shirt_type: row.shirt_type,
   size: row.size,
+  size_quantities: parseStockRequestSizes(row.size_quantities, row.size),
   has_print: row.has_print === true,
   dorsal: row.dorsal,
   printed_name: row.printed_name,
@@ -677,16 +757,34 @@ const normalizeStockRequest = (payload) => {
   const phone = String(payload.phone || '').trim();
   const model = String(payload.model || '').trim();
   const shirtType = String(payload.shirt_type || '').trim().toLowerCase();
-  const size = String(payload.size || '').trim().toUpperCase();
+  const rawSizes = payload.size_quantities;
+  let sizeQuantities = rawSizes;
+  if (typeof sizeQuantities === 'string') {
+    try {
+      sizeQuantities = JSON.parse(sizeQuantities);
+    } catch (error) {
+      throw new Error('Indica cantidades válidas para las tallas.');
+    }
+  }
+  if (!sizeQuantities || typeof sizeQuantities !== 'object' || Array.isArray(sizeQuantities)) sizeQuantities = {};
+  const sizeEntries = ['XS', 'S', 'M', 'L', 'XL', 'XXL']
+    .map((size) => [size, sizeQuantities[size] === '' || sizeQuantities[size] == null ? 0 : Number(sizeQuantities[size])]);
+  const invalidQuantity = sizeEntries.some(([, quantity]) => !Number.isSafeInteger(quantity) || quantity < 0);
+  sizeQuantities = Object.fromEntries(sizeEntries.filter(([, quantity]) => quantity > 0));
+  const legacySize = String(payload.size || '').trim().toUpperCase();
+  if (!Object.keys(sizeQuantities).length && ['XS', 'S', 'M', 'L', 'XL', 'XXL'].includes(legacySize)) {
+    sizeQuantities[legacySize] = 1;
+  }
+  const size = Object.keys(sizeQuantities)[0] || legacySize;
   const hasPrint = payload.has_print === true || String(payload.has_print).toLowerCase() === 'true';
   const printedName = String(payload.printed_name || '').trim();
   const dorsal = String(payload.dorsal || '').trim();
   const depositAmount = Number(payload.deposit_amount || 0);
   const depositCurrency = String(payload.deposit_currency || 'USD').trim().toUpperCase();
 
-  if (!clientName || !phone || !model || !size) throw new Error('Completa el nombre, teléfono, modelo y talla.');
+  if (!clientName || !phone || !model || !size) throw new Error('Completa el nombre, teléfono, modelo y al menos una cantidad por talla.');
   if (!['local', 'visitante', 'alternativa'].includes(shirtType)) throw new Error('Selecciona un tipo de camiseta válido.');
-  if (!['XS', 'S', 'M', 'L', 'XL', 'XXL'].includes(size)) throw new Error('Selecciona una talla válida.');
+  if (invalidQuantity || Object.values(sizeQuantities).some((quantity) => quantity <= 0)) throw new Error('Cada cantidad por talla debe ser un número entero mayor que cero.');
   if (hasPrint && !printedName) throw new Error('Indica el nombre que se estampará en la camiseta.');
   if (hasPrint && (!/^\d{1,2}$/.test(dorsal) || Number(dorsal) > 99)) throw new Error('Indica un número de dorsal válido entre 0 y 99.');
   if (!Number.isFinite(depositAmount) || depositAmount < 0) throw new Error('El abono debe ser un monto válido y no negativo.');
@@ -699,6 +797,7 @@ const normalizeStockRequest = (payload) => {
     model,
     shirtType,
     size,
+    sizeQuantities,
     hasPrint,
     dorsal: hasPrint ? dorsal : null,
     printedName: hasPrint ? printedName : null,
@@ -717,6 +816,7 @@ const stockRequestValues = (request) => [
   request.model,
   request.shirtType,
   request.size,
+  request.sizeQuantities,
   request.hasPrint,
   request.dorsal,
   request.printedName,
@@ -731,8 +831,8 @@ export const createStockRequest = async (payload) => {
   const request = normalizeStockRequest(payload);
   const result = await pool.query(`
     INSERT INTO stock_requests
-      (client_name, phone, email, model, shirt_type, size, has_print, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      (client_name, phone, email, model, shirt_type, size, size_quantities, has_print, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *
   `, [
     request.clientName,
@@ -741,6 +841,7 @@ export const createStockRequest = async (payload) => {
     request.model,
     request.shirtType,
     request.size,
+    JSON.stringify(request.sizeQuantities),
     request.hasPrint,
     request.dorsal,
     request.printedName,
@@ -756,12 +857,12 @@ export const updateStockRequest = async (id, payload) => {
   const request = normalizeStockRequest(payload);
   const result = await pool.query(`
     UPDATE stock_requests SET
-      client_name = $1, phone = $2, email = $3, model = $4, shirt_type = $5, size = $6,
-      has_print = $7, dorsal = $8, printed_name = $9, deposit_amount = $10,
-      deposit_currency = $11,
-      image_url = CASE WHEN $13 THEN NULL WHEN $12 IS NOT NULL THEN $12 ELSE image_url END,
-      notes = $14
-    WHERE id = $15
+      client_name = $1, phone = $2, email = $3, model = $4, shirt_type = $5, size = $6, size_quantities = $7,
+      has_print = $8, dorsal = $9, printed_name = $10, deposit_amount = $11,
+      deposit_currency = $12,
+      image_url = CASE WHEN $14 THEN NULL WHEN $13 IS NOT NULL THEN $13 ELSE image_url END,
+      notes = $15
+    WHERE id = $16
     RETURNING *
   `, [...stockRequestValues(request), Number(id)]);
   return result.rows[0] ? mapStockRequest(result.rows[0]) : null;
