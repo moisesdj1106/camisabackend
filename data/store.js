@@ -414,6 +414,7 @@ export const initializeStore = async () => {
       shirt_type VARCHAR(20) NOT NULL CHECK (shirt_type IN ('local', 'visitante', 'alternativa')),
       size VARCHAR(10) NOT NULL,
       size_quantities JSONB NOT NULL DEFAULT '{}'::jsonb,
+      printed_details JSONB NOT NULL DEFAULT '[]'::jsonb,
       has_print BOOLEAN NOT NULL DEFAULT FALSE,
       dorsal VARCHAR(50),
       printed_name VARCHAR(150),
@@ -425,6 +426,7 @@ export const initializeStore = async () => {
     );
   `);
   await pool.query(`ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS size_quantities JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS printed_details JSONB NOT NULL DEFAULT '[]'::jsonb;`);
   await pool.query('ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS has_print BOOLEAN NOT NULL DEFAULT FALSE;');
   await pool.query('CREATE INDEX IF NOT EXISTS stock_requests_created_at_idx ON stock_requests (created_at DESC);');
 
@@ -733,24 +735,50 @@ const parseStockRequestSizes = (value, legacySize) => {
   return normalized;
 };
 
-const mapStockRequest = (row) => ({
-  id: Number(row.id),
-  client_name: row.client_name,
-  phone: row.phone,
-  email: row.email,
-  model: row.model,
-  shirt_type: row.shirt_type,
-  size: row.size,
-  size_quantities: parseStockRequestSizes(row.size_quantities, row.size),
-  has_print: row.has_print === true,
-  dorsal: row.dorsal,
-  printed_name: row.printed_name,
-  deposit_amount: Number(row.deposit_amount || 0),
-  deposit_currency: row.deposit_currency,
-  image_url: row.image_url,
-  notes: row.notes,
-  created_at: row.created_at
-});
+const mapStockRequest = (row) => {
+  const sizeQuantities = parseStockRequestSizes(row.size_quantities, row.size);
+  const printedDetails = parseStockRequestPrintDetails(row.printed_details);
+  if (!printedDetails.length && row.has_print === true && row.printed_name && row.dorsal) {
+    Object.entries(sizeQuantities).forEach(([size, quantity]) => {
+      printedDetails.push({
+        size,
+        quantity,
+        printed_name: row.printed_name,
+        dorsal: row.dorsal
+      });
+    });
+  }
+  return {
+    id: Number(row.id),
+    client_name: row.client_name,
+    phone: row.phone,
+    email: row.email,
+    model: row.model,
+    shirt_type: row.shirt_type,
+    size: row.size,
+    size_quantities: sizeQuantities,
+    printed_details: printedDetails,
+    has_print: row.has_print === true,
+    dorsal: row.dorsal,
+    printed_name: row.printed_name,
+    deposit_amount: Number(row.deposit_amount || 0),
+    deposit_currency: row.deposit_currency,
+    image_url: row.image_url,
+    notes: row.notes,
+    created_at: row.created_at
+  };
+};
+
+const parseStockRequestPrintDetails = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
 
 const normalizeStockRequest = (payload) => {
   const clientName = String(payload.client_name || '').trim();
@@ -779,14 +807,53 @@ const normalizeStockRequest = (payload) => {
   const hasPrint = payload.has_print === true || String(payload.has_print).toLowerCase() === 'true';
   const printedName = String(payload.printed_name || '').trim();
   const dorsal = String(payload.dorsal || '').trim();
+  let printedDetails = payload.printed_details;
+  if (typeof printedDetails === 'string') {
+    try {
+      printedDetails = JSON.parse(printedDetails);
+    } catch {
+      throw new Error('Indica datos válidos para cada estampado.');
+    }
+  }
+  if (!Array.isArray(printedDetails)) printedDetails = [];
+  if (!printedDetails.length && hasPrint && printedName && dorsal) {
+    printedDetails = Object.entries(sizeQuantities).map(([detailSize, quantity]) => ({
+      size: detailSize,
+      quantity,
+      printed_name: printedName,
+      dorsal
+    }));
+  }
+  printedDetails = printedDetails.map((detail) => ({
+    size: String(detail?.size || '').trim().toUpperCase(),
+    quantity: detail?.quantity === '' || detail?.quantity == null ? 0 : Number(detail.quantity),
+    printed_name: String(detail?.printed_name || '').trim(),
+    dorsal: String(detail?.dorsal || '').trim()
+  }));
+  const stampedBySize = {};
+  printedDetails.forEach((detail) => {
+    stampedBySize[detail.size] = (stampedBySize[detail.size] || 0) + detail.quantity;
+  });
+  const hasValidPrintDetails = printedDetails.every((detail) =>
+    ['XS', 'S', 'M', 'L', 'XL', 'XXL'].includes(detail.size)
+    && Number.isSafeInteger(detail.quantity)
+    && detail.quantity > 0
+    && Boolean(sizeQuantities[detail.size])
+    && detail.quantity <= sizeQuantities[detail.size]
+    && Boolean(detail.printed_name)
+    && /^\d{1,2}$/.test(detail.dorsal)
+    && Number(detail.dorsal) <= 99
+  ) && Object.entries(stampedBySize).every(([detailSize, quantity]) => quantity <= sizeQuantities[detailSize]);
+  const hasStampedUnits = printedDetails.length > 0;
   const depositAmount = Number(payload.deposit_amount || 0);
   const depositCurrency = String(payload.deposit_currency || 'USD').trim().toUpperCase();
 
   if (!clientName || !phone || !model || !size) throw new Error('Completa el nombre, teléfono, modelo y al menos una cantidad por talla.');
   if (!['local', 'visitante', 'alternativa'].includes(shirtType)) throw new Error('Selecciona un tipo de camiseta válido.');
   if (invalidQuantity || Object.values(sizeQuantities).some((quantity) => quantity <= 0)) throw new Error('Cada cantidad por talla debe ser un número entero mayor que cero.');
-  if (hasPrint && !printedName) throw new Error('Indica el nombre que se estampará en la camiseta.');
-  if (hasPrint && (!/^\d{1,2}$/.test(dorsal) || Number(dorsal) > 99)) throw new Error('Indica un número de dorsal válido entre 0 y 99.');
+  if ((hasPrint || printedDetails.length) && (!printedDetails.length || !hasValidPrintDetails)) {
+    throw new Error('Completa la talla, cantidad, nombre y dorsal de cada estampado; las cantidades estampadas no pueden superar las solicitadas.');
+  }
   if (!Number.isFinite(depositAmount) || depositAmount < 0) throw new Error('El abono debe ser un monto válido y no negativo.');
   if (!['USD', 'BS'].includes(depositCurrency)) throw new Error('Selecciona una moneda válida para el abono.');
 
@@ -798,9 +865,10 @@ const normalizeStockRequest = (payload) => {
     shirtType,
     size,
     sizeQuantities,
-    hasPrint,
-    dorsal: hasPrint ? dorsal : null,
-    printedName: hasPrint ? printedName : null,
+    hasPrint: hasStampedUnits,
+    dorsal: hasStampedUnits ? printedDetails[0].dorsal : null,
+    printedName: hasStampedUnits ? printedDetails[0].printed_name : null,
+    printedDetails: hasStampedUnits ? printedDetails : [],
     depositAmount,
     depositCurrency,
     imageUrl: payload.image_url || null,
@@ -824,15 +892,16 @@ const stockRequestValues = (request) => [
   request.depositCurrency,
   request.imageUrl,
   request.removeImage,
-  request.notes
+  request.notes,
+  JSON.stringify(request.printedDetails)
 ];
 
 export const createStockRequest = async (payload) => {
   const request = normalizeStockRequest(payload);
   const result = await pool.query(`
     INSERT INTO stock_requests
-      (client_name, phone, email, model, shirt_type, size, size_quantities, has_print, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      (client_name, phone, email, model, shirt_type, size, size_quantities, has_print, dorsal, printed_name, deposit_amount, deposit_currency, image_url, notes, printed_details)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
     RETURNING *
   `, [
     request.clientName,
@@ -848,7 +917,8 @@ export const createStockRequest = async (payload) => {
     request.depositAmount,
     request.depositCurrency,
     request.imageUrl,
-    request.notes
+    request.notes,
+    JSON.stringify(request.printedDetails)
   ]);
   return mapStockRequest(result.rows[0]);
 };
@@ -860,9 +930,10 @@ export const updateStockRequest = async (id, payload) => {
       client_name = $1, phone = $2, email = $3, model = $4, shirt_type = $5, size = $6, size_quantities = $7,
       has_print = $8, dorsal = $9, printed_name = $10, deposit_amount = $11,
       deposit_currency = $12,
-      image_url = CASE WHEN $14 THEN NULL WHEN $13 IS NOT NULL THEN $13 ELSE image_url END,
-      notes = $15
-    WHERE id = $16
+      image_url = CASE WHEN $14::boolean THEN NULL WHEN $13::text IS NOT NULL THEN $13::text ELSE image_url END,
+      notes = $15,
+      printed_details = $16::jsonb
+    WHERE id = $17
     RETURNING *
   `, [...stockRequestValues(request), Number(id)]);
   return result.rows[0] ? mapStockRequest(result.rows[0]) : null;

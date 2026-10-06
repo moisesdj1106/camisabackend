@@ -415,7 +415,9 @@ export const createInventoryPdf = async (products) => {
   doc.on('data', (chunk) => chunks.push(chunk));
   const logoPath = findLogoPath();
   const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
-  const photos = await Promise.all(products.map((product) => loadStoredImage(product.image_url)));
+  const photos = await Promise.all(products.map((product) =>
+    loadStoredImage(product.image_urls?.[0] || product.image_url)
+  ));
   const contentX = 36;
   const contentWidth = 523;
   const footerY = 755;
@@ -581,16 +583,13 @@ export const createStockRequestsPdf = async (requests, dateRange = {}) => {
     const sizeSummary = Object.entries(request.size_quantities || { [request.size]: 1 })
       .map(([size, quantity]) => `${size}: ${quantity}`)
       .join(' · ');
+    const printSummary = (request.printed_details || []).map((detail) =>
+      `${detail.quantity} ${detail.size} · ${detail.printed_name} #${detail.dorsal}`
+    ).join('; ');
     doc.fillColor('#475569').fontSize(8.5).text(
-      `${typeLabels[request.shirt_type] || request.shirt_type} · ${sizeSummary} · ${request.has_print ? `Dorsal ${request.dorsal}` : 'Sin estampar'}`,
-      textX, cardY + 65, { width: 270 }
+      `${typeLabels[request.shirt_type] || request.shirt_type} · ${sizeSummary} · ${printSummary || 'Sin estampar'}`,
+      textX, cardY + 65, { width: 270, height: 30, ellipsis: true }
     );
-    if (request.has_print) {
-      doc.fillColor('#475569').fontSize(8.5).text(
-        `Nombre estampado: ${request.printed_name}`,
-        textX, cardY + 81, { width: 270 }
-      );
-    }
     doc.fillColor('#0f766e').fontSize(9).text(
       `Abono: ${request.deposit_currency === 'BS' ? 'BS ' : '$'}${Number(request.deposit_amount || 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       rightX, cardY + 13, { width: 107, align: 'right' }
