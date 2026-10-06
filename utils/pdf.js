@@ -484,7 +484,7 @@ export const createInventoryPdf = async (products) => {
     const textWidth = contentWidth - 116;
     doc.fillColor('#0f2d52').fontSize(11).text(String(product.title || 'Camiseta sin nombre'), textX, cardY + 13, { width: textWidth, height: 19, ellipsis: true });
     doc.fillColor('#475569').fontSize(8.5).text(
-      `${productTypeLabel(product.type, product.title)}${product.club?.name ? ` · ${product.club.name}` : ''}`,
+      productTypeLabel(product.type, product.title),
       textX, cardY + 37, { width: textWidth }
     );
     doc.fillColor('#172033').fontSize(8.5).text(`Tallas: ${sizeSummary}`, textX, cardY + 55, { width: textWidth, height: 14, ellipsis: true });
@@ -495,11 +495,21 @@ export const createInventoryPdf = async (products) => {
     doc.y = cardY + cardHeight + 8;
   });
 
-  ensureSpace(58);
-  doc.roundedRect(contentX, doc.y, contentWidth, 50, 8).fill('#ecfdf5').strokeColor('#86efac').stroke();
-  doc.fillColor('#166534').fontSize(10).text('TOTAL DE CAMISETAS DISPONIBLES', contentX + 16, doc.y + 10);
-  doc.fillColor('#14532d').fontSize(17).text(`${totalUnits} unidades`, contentX + 16, doc.y + 25);
-  doc.y += 60;
+  ensureSpace(42);
+  const summaryY = doc.y;
+  doc.roundedRect(contentX, summaryY, contentWidth, 34, 7).fill('#ecfdf5').strokeColor('#86efac').stroke();
+  doc.fillColor('#166534').fontSize(9).text('TOTAL DE CAMISETAS DISPONIBLES', contentX + 13, summaryY + 11, {
+    width: contentWidth - 150,
+    height: 12,
+    ellipsis: true
+  });
+  doc.fillColor('#14532d').fontSize(10.5).text(`${totalUnits} camisetas`, contentX + contentWidth - 125, summaryY + 10, {
+    width: 112,
+    height: 14,
+    align: 'right',
+    ellipsis: true
+  });
+  doc.y = summaryY + 42;
   drawPageFooter();
   doc.end();
   return await new Promise((resolve) => {
