@@ -158,6 +158,9 @@ const mapOrder = (row) => (row ? {
   delivery_payment_proof_url: row.delivery_payment_proof_url || null,
   payment_received_at: row.payment_received_at || null,
   delivery_payment_received_at: row.delivery_payment_received_at || null,
+  first_payment_exchange_rate: row.first_payment_exchange_rate ? Number(row.first_payment_exchange_rate) : null,
+  full_payment_exchange_rate: row.full_payment_exchange_rate ? Number(row.full_payment_exchange_rate) : null,
+  delivery_payment_exchange_rate: row.delivery_payment_exchange_rate ? Number(row.delivery_payment_exchange_rate) : null,
   delivery_method: row.delivery_method || 'personal',
   shipping_details: row.shipping_details || null,
   status: row.status,
@@ -489,6 +492,18 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_currency VARCHAR(3);`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_received_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_received_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS first_payment_exchange_rate NUMERIC(12,2);`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS full_payment_exchange_rate NUMERIC(12,2);`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_payment_exchange_rate NUMERIC(12,2);`);
+  await pool.query(`
+    UPDATE orders
+    SET first_payment_exchange_rate = CASE WHEN payment_plan = 'installments' AND (first_payment_amount > 0 OR payment_proof_url IS NOT NULL) THEN COALESCE(first_payment_exchange_rate, NULLIF(exchange_rate, 0)) ELSE first_payment_exchange_rate END,
+        full_payment_exchange_rate = CASE WHEN payment_plan = 'full' AND (full_payment_amount > 0 OR payment_proof_url IS NOT NULL) THEN COALESCE(full_payment_exchange_rate, NULLIF(exchange_rate, 0)) ELSE full_payment_exchange_rate END,
+        delivery_payment_exchange_rate = CASE WHEN payment_plan = 'installments' AND (delivery_payment_amount > 0 OR delivery_payment_proof_url IS NOT NULL) THEN COALESCE(delivery_payment_exchange_rate, NULLIF(exchange_rate, 0)) ELSE delivery_payment_exchange_rate END
+    WHERE (first_payment_exchange_rate IS NULL AND payment_plan = 'installments' AND (first_payment_amount > 0 OR payment_proof_url IS NOT NULL))
+      OR (full_payment_exchange_rate IS NULL AND payment_plan = 'full' AND (full_payment_amount > 0 OR payment_proof_url IS NOT NULL))
+      OR (delivery_payment_exchange_rate IS NULL AND payment_plan = 'installments' AND (delivery_payment_amount > 0 OR delivery_payment_proof_url IS NOT NULL))
+  `);
   await pool.query(`UPDATE orders SET delivery_payment_currency = CASE WHEN REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' THEN 'BS' ELSE 'USD' END WHERE delivery_payment_currency IS NULL;`);
   await pool.query(`UPDATE orders SET payment_plan = 'installments' WHERE delivery_payment_proof_url IS NOT NULL AND payment_plan = 'full';`);
 
@@ -1097,12 +1112,15 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
       }
     }
     const orderRes = await client.query(
-      `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, stock_reserved, exchange_rate, payment_received_at, delivery_payment_received_at)
+      `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, stock_reserved, exchange_rate, payment_received_at, delivery_payment_received_at, first_payment_exchange_rate, full_payment_exchange_rate, delivery_payment_exchange_rate)
         VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, TRUE, $17,
           CASE WHEN $12::text IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
-          CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END)
+          CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
+          CASE WHEN $6::varchar = 'installments' AND ($12::text IS NOT NULL OR $7 > 0) THEN $17 ELSE NULL END,
+          CASE WHEN $6::varchar = 'full' AND ($12::text IS NOT NULL OR $9 > 0) THEN $17 ELSE NULL END,
+          CASE WHEN $6::varchar = 'installments' AND ($13::text IS NOT NULL OR $10 > 0) THEN $17 ELSE NULL END)
         RETURNING *`,
-      [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || totalAmount) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
+      [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || (normalizedDeliveryPaymentCurrency === 'BS' ? totalAmount * exchangeRate : totalAmount)) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
     );
     const order = mapOrder(orderRes.rows[0]);
     for (const item of pricedItems) {
@@ -1437,6 +1455,7 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
     const existing = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
     if (!existing.rows[0]) throw new Error('Pedido no encontrado.');
     const currentOrder = existing.rows[0];
+    const paymentExchangeRate = Number(await getExchangeRate());
     const firstPaymentCurrency = paymentPlan === 'installments'
       ? String(payload.first_payment_currency || currentOrder.first_payment_currency || 'USD').toUpperCase()
       : 'USD';
@@ -1464,6 +1483,16 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
     const finalPaymentChanged = paymentPlan !== currentOrder.payment_plan
       || (payload.delivery_payment_proof_url || null) !== (currentOrder.delivery_payment_proof_url || null)
       || deliveryPaymentAmount !== Number(currentOrder.delivery_payment_amount || 0);
+    const normalizePaymentRate = (value, storedRate, changed) => {
+      const requestedRate = value === undefined || value === '' ? 0 : Number(value);
+      if (requestedRate !== 0 && (!Number.isFinite(requestedRate) || requestedRate <= 0)) {
+        throw new Error('Cada tasa de pago debe ser un número mayor que cero.');
+      }
+      return requestedRate || (changed ? paymentExchangeRate : Number(storedRate || currentOrder.exchange_rate || paymentExchangeRate));
+    };
+    const firstPaymentRate = normalizePaymentRate(payload.first_payment_exchange_rate, currentOrder.first_payment_exchange_rate, firstPaymentChanged);
+    const fullPaymentRate = normalizePaymentRate(payload.full_payment_exchange_rate, currentOrder.full_payment_exchange_rate, firstPaymentChanged);
+    const deliveryPaymentRate = normalizePaymentRate(payload.delivery_payment_exchange_rate, currentOrder.delivery_payment_exchange_rate, finalPaymentChanged);
     if (![fullPaymentAmount, deliveryPaymentAmount].every((amount) => Number.isFinite(amount) && amount >= 0)) {
       throw new Error('Los montos recibidos deben ser números válidos y no negativos.');
     }
@@ -1475,7 +1504,7 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
       if (!Number.isFinite(firstPaymentAmount) || firstPaymentAmount <= 0 || !['USD', 'BS'].includes(firstPaymentCurrency)) {
         throw new Error('Indica un monto válido para el primer pago y su moneda.');
       }
-      const rate = Number(currentOrder.exchange_rate || 0);
+      const rate = firstPaymentRate;
       const paidUsd = firstPaymentCurrency === 'BS' ? firstPaymentAmount / rate : firstPaymentAmount;
       if (!Number.isFinite(paidUsd) || paidUsd >= Number(currentOrder.total_amount)) {
         throw new Error('El primer abono debe ser menor que el total; si ya se pagó todo, selecciona pago completo.');
@@ -1520,10 +1549,22 @@ export const updateOrderAdmin = async (orderId, payload, userId) => {
               WHEN $15::boolean OR (delivery_payment_received_at IS NULL AND ($4::text IS NOT NULL OR $12::numeric > 0)) THEN CURRENT_TIMESTAMP
               ELSE delivery_payment_received_at
             END,
+            first_payment_exchange_rate = CASE
+              WHEN $3::varchar <> 'installments' THEN NULL
+              ELSE $17::numeric
+            END,
+            full_payment_exchange_rate = CASE
+              WHEN $3::varchar <> 'full' THEN NULL
+              ELSE $18::numeric
+            END,
+            delivery_payment_exchange_rate = CASE
+              WHEN $3::varchar <> 'installments' OR ($4::text IS NULL AND $12::numeric = 0) THEN NULL
+              ELSE $19::numeric
+            END,
             delivery_method = $5, shipping_details = $6, status = $7, stock_reserved = $16
         WHERE id = $8
       RETURNING *
-      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency, firstPaymentChanged, finalPaymentChanged, stockReserved]);
+      `, [payload.payment_method, paymentProofUrl, paymentPlan, payload.delivery_payment_proof_url || null, payload.delivery_method, payload.delivery_method === 'national' ? payload.shipping_details : null, payload.status, orderId, firstPaymentAmount, firstPaymentCurrency, fullPaymentAmount, deliveryPaymentAmount, deliveryPaymentCurrency, firstPaymentChanged, finalPaymentChanged, stockReserved, firstPaymentRate, fullPaymentRate, deliveryPaymentRate]);
 
     if (payload.delivery_method === 'national') {
       await client.query(`
@@ -1796,6 +1837,7 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
 
   const result = await pool.query(`
     SELECT id, total_amount, payment_method, payment_plan, exchange_rate,
+      first_payment_exchange_rate, full_payment_exchange_rate, delivery_payment_exchange_rate,
       first_payment_amount, first_payment_currency, full_payment_amount,
       delivery_payment_amount, delivery_payment_currency,
       payment_proof_url, delivery_payment_proof_url,
@@ -1814,6 +1856,9 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
     const totalUsd = Number(order.total_amount || 0);
     const storedRate = Number(order.exchange_rate || 0);
     const rate = storedRate > 0 ? storedRate : fallbackRate;
+    const firstRate = Number(order.first_payment_exchange_rate || 0) || rate;
+    const fullRate = Number(order.full_payment_exchange_rate || 0) || rate;
+    const finalRate = Number(order.delivery_payment_exchange_rate || 0) || rate;
     const normalizedMethod = String(order.payment_method || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const methodCurrency = normalizedMethod === 'pagomovil' ? 'BS' : 'USD';
     const entries = [];
@@ -1822,7 +1867,7 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
     if (order.payment_plan === 'installments') {
       const firstAmount = Number(order.first_payment_amount || 0);
       const firstCurrency = String(order.first_payment_currency || 'USD').toUpperCase() === 'BS' ? 'BS' : 'USD';
-      const firstUsd = Math.max(0, toUsd(firstAmount, firstCurrency, rate));
+      const firstUsd = Math.max(0, toUsd(firstAmount, firstCurrency, firstRate));
       paidUsd += firstUsd;
       if (firstAmount > 0 && isWithinPeriod(order.first_payment_local)) {
         entries.push({ kind: 'Abono inicial', amount: firstAmount, currency: firstCurrency, amountUsd: firstUsd, receivedAt: order.first_payment_local });
@@ -1832,8 +1877,8 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
       const storedFinalAmount = Number(order.delivery_payment_amount || 0);
       const finalAmount = storedFinalAmount > 0
         ? storedFinalAmount
-        : order.delivery_payment_proof_url ? Math.max(0, totalUsd - firstUsd) * (finalCurrency === 'BS' ? rate : 1) : 0;
-      const finalUsd = Math.max(0, toUsd(finalAmount, finalCurrency, rate));
+        : order.delivery_payment_proof_url ? Math.max(0, totalUsd - firstUsd) * (finalCurrency === 'BS' ? finalRate : 1) : 0;
+      const finalUsd = Math.max(0, toUsd(finalAmount, finalCurrency, finalRate));
       paidUsd += finalUsd;
       if (finalAmount > 0 && isWithinPeriod(order.final_payment_local)) {
         entries.push({ kind: 'Abono final', amount: finalAmount, currency: finalCurrency, amountUsd: finalUsd, receivedAt: order.final_payment_local });
@@ -1841,7 +1886,7 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
     } else {
       const storedAmount = Number(order.full_payment_amount || 0);
       const amount = storedAmount > 0 ? storedAmount : totalUsd * (methodCurrency === 'BS' ? rate : 1);
-      const amountUsd = Math.max(0, toUsd(amount, methodCurrency, rate));
+      const amountUsd = Math.max(0, toUsd(amount, methodCurrency, fullRate));
       paidUsd = amountUsd;
       if (amount > 0 && isWithinPeriod(order.first_payment_local)) {
         entries.push({ kind: 'Pago completo', amount, currency: methodCurrency, amountUsd, receivedAt: order.first_payment_local });
@@ -2078,6 +2123,9 @@ export const getDashboardStats = async () => {
         REGEXP_REPLACE(TRANSLATE(LOWER(payment_method), 'áéíóúü', 'aeiouu'), '[^a-z0-9]', '', 'g') = 'pagomovil' AS method_is_bs,
         total_amount::numeric AS total_usd,
         CASE WHEN COALESCE(exchange_rate, 0) > 0 THEN exchange_rate ELSE $1::numeric END AS rate,
+        COALESCE(NULLIF(first_payment_exchange_rate, 0), NULLIF(exchange_rate, 0), $1::numeric) AS first_rate,
+        COALESCE(NULLIF(full_payment_exchange_rate, 0), NULLIF(exchange_rate, 0), $1::numeric) AS full_rate,
+        COALESCE(NULLIF(delivery_payment_exchange_rate, 0), NULLIF(exchange_rate, 0), $1::numeric) AS delivery_rate,
         payment_plan,
         first_payment_amount::numeric AS first_payment_amount,
         first_payment_currency,
@@ -2091,21 +2139,21 @@ export const getDashboardStats = async () => {
     ), payments_usd AS (
       SELECT *,
         CASE WHEN is_confirmed AND payment_plan = 'installments'
-          THEN CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / rate ELSE first_payment_amount END
+          THEN CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / first_rate ELSE first_payment_amount END
           ELSE 0
         END AS first_usd,
         CASE
           WHEN is_confirmed AND payment_plan = 'full' THEN
             CASE WHEN full_payment_amount > 0
-              THEN CASE WHEN method_is_bs THEN full_payment_amount / rate ELSE full_payment_amount END
+              THEN CASE WHEN method_is_bs THEN full_payment_amount / full_rate ELSE full_payment_amount END
               ELSE total_usd
             END
           WHEN is_confirmed AND payment_plan = 'installments' THEN
             CASE
               WHEN delivery_payment_amount > 0 THEN
-                CASE WHEN COALESCE(NULLIF(delivery_payment_currency, ''), CASE WHEN method_is_bs THEN 'BS' ELSE 'USD' END) = 'BS' THEN delivery_payment_amount / rate ELSE delivery_payment_amount END
+                CASE WHEN COALESCE(NULLIF(delivery_payment_currency, ''), CASE WHEN method_is_bs THEN 'BS' ELSE 'USD' END) = 'BS' THEN delivery_payment_amount / delivery_rate ELSE delivery_payment_amount END
               WHEN delivery_payment_proof_url IS NOT NULL THEN
-                GREATEST(0, total_usd - CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / rate ELSE first_payment_amount END)
+                GREATEST(0, total_usd - CASE WHEN first_payment_currency = 'BS' THEN first_payment_amount / first_rate ELSE first_payment_amount END)
               ELSE 0
             END
           ELSE 0
@@ -2113,7 +2161,8 @@ export const getDashboardStats = async () => {
         CASE WHEN payment_plan = 'installments'
           THEN COALESCE(NULLIF(delivery_payment_currency, ''), CASE WHEN method_is_bs THEN 'BS' ELSE 'USD' END) = 'BS'
           ELSE method_is_bs
-        END AS other_is_bs
+        END AS other_is_bs,
+        CASE WHEN payment_plan = 'installments' THEN delivery_rate ELSE full_rate END AS other_rate
       FROM active_orders
     ), bounded_first_payments AS (
       SELECT *,
@@ -2129,11 +2178,12 @@ export const getDashboardStats = async () => {
       COALESCE(SUM(total_usd), 0) AS usd_expected,
       COALESCE(SUM(total_usd * rate), 0) AS bs_expected,
       COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'USD' THEN capped_first_usd ELSE 0 END), 0) AS first_received_usd,
-      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * rate ELSE 0 END), 0) AS first_received_bs,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * first_rate ELSE 0 END), 0) AS first_received_bs,
       COALESCE(SUM(CASE WHEN NOT other_is_bs THEN capped_other_usd ELSE 0 END), 0) AS other_received_usd,
-      COALESCE(SUM(CASE WHEN other_is_bs THEN capped_other_usd * rate ELSE 0 END), 0) AS other_received_bs,
+      COALESCE(SUM(CASE WHEN other_is_bs THEN capped_other_usd * other_rate ELSE 0 END), 0) AS other_received_bs,
       COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'USD' THEN capped_first_usd ELSE 0 END + CASE WHEN NOT other_is_bs THEN capped_other_usd ELSE 0 END), 0) AS usd_received,
-      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * rate ELSE 0 END + CASE WHEN other_is_bs THEN capped_other_usd * rate ELSE 0 END), 0) AS bs_received,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd * first_rate ELSE 0 END + CASE WHEN other_is_bs THEN capped_other_usd * other_rate ELSE 0 END), 0) AS bs_received,
+      COALESCE(SUM(CASE WHEN UPPER(COALESCE(first_payment_currency, '')) = 'BS' THEN capped_first_usd ELSE 0 END + CASE WHEN other_is_bs THEN capped_other_usd ELSE 0 END), 0) AS bs_received_equivalent_usd,
       COALESCE(SUM(GREATEST(0, total_usd - received_usd)), 0) AS usd_pending,
       COALESCE(SUM(GREATEST(0, total_usd - received_usd) * rate), 0) AS bs_pending
     FROM bounded_payments
@@ -2152,6 +2202,7 @@ export const getDashboardStats = async () => {
       first: Number(ledgerRow.first_received_bs || 0),
       other: Number(ledgerRow.other_received_bs || 0),
       received: Number(ledgerRow.bs_received || 0),
+      equivalentUsd: Number(ledgerRow.bs_received_equivalent_usd || 0),
       pending: Number(ledgerRow.bs_pending || 0)
     }
   };
