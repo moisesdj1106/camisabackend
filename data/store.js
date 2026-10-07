@@ -660,6 +660,9 @@ export const listProducts = async (filters = {}) => {
     values.push(Number(filters.maxPrice));
     query += ` AND p.price <= $${values.length}`;
   }
+  if (filters.activeOnly) {
+    query += ' AND p.is_active = TRUE';
+  }
 
   query += ' ORDER BY p.id ASC';
   const result = await pool.query(query, values);

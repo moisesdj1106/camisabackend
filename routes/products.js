@@ -1,6 +1,7 @@
 import express from 'express';
-import { createProduct, deleteProduct, getProductById, getProductLikeStatus, listProducts, toggleProductLike, updateProduct } from '../data/store.js';
+import { createProduct, deleteProduct, getExchangeRate, getProductById, getProductLikeStatus, listProducts, toggleProductLike, updateProduct } from '../data/store.js';
 import { authMiddleware, adminOnly, audit } from '../middleware/auth.js';
+import { createCatalogPdf } from '../utils/pdf.js';
 
 export const productsRouter = express.Router();
 
@@ -8,6 +9,22 @@ productsRouter.get('/', async (req, res) => {
   const { club, type, minPrice, maxPrice, q } = req.query;
   const products = await listProducts({ club, type, minPrice, maxPrice, q });
   res.json(products);
+});
+
+productsRouter.get('/catalog.pdf', async (_req, res) => {
+  try {
+    const [products, exchangeRate] = await Promise.all([
+      listProducts({ activeOnly: true }),
+      getExchangeRate()
+    ]);
+    const pdfBuffer = await createCatalogPdf(products, exchangeRate);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="catalogo-digital-mdj-soccer.pdf"');
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error(`Error generando catálogo PDF: ${error.message}`, error.code || '');
+    res.status(500).json({ error: 'No se pudo generar el catálogo digital.' });
+  }
 });
 
 productsRouter.get('/:id', async (req, res) => {

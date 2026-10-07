@@ -409,6 +409,110 @@ const loadStoredImage = async (imageUrl) => {
   }
 };
 
+export const createCatalogPdf = async (products, exchangeRate) => {
+  const safeRate = Number(exchangeRate);
+  if (!Number.isFinite(safeRate) || safeRate <= 0) {
+    throw new Error('La tasa de cambio debe ser mayor que cero para generar el catálogo.');
+  }
+
+  const doc = new PDFDocument({ size: 'A4', margin: 36 });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+  const logoPath = findLogoPath();
+  const logoImage = logoPath ? fs.readFileSync(logoPath) : null;
+  const photos = await Promise.all(products.map((product) =>
+    loadStoredImage(product.image_urls?.[0] || product.image_url)
+  ));
+  const contentX = 36;
+  const contentWidth = 523;
+  const footerY = 755;
+  const columnGap = 12;
+  const cardWidth = (contentWidth - columnGap) / 2;
+  const cardHeight = 188;
+  let pageNumber = 1;
+
+  const drawPageHeader = () => {
+    doc.y = 36;
+    doc.roundedRect(contentX, 36, contentWidth, 68, 10).fill('#0f2d52');
+    if (logoImage) {
+      doc.image(logoImage, contentX + 12, 43, { fit: [54, 54], align: 'center', valign: 'center' });
+    }
+    doc.fillColor('#ffffff').fontSize(19).text('CATÁLOGO DIGITAL', contentX + 76, 49);
+    doc.fillColor('#cfe4ff').fontSize(9).text(
+      `MDJ SOCCER · Precios en USD y Bs · Tasa ${safeRate.toFixed(2)} BS/USD · ${new Date().toLocaleDateString('es-VE')}`,
+      contentX + 76, 77, { width: contentWidth - 92 }
+    );
+    doc.y = 116;
+  };
+
+  const drawPageFooter = () => {
+    doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
+    doc.fontSize(8).fillColor('#64748b').text(
+      'MDJ SOCCER · San Cristóbal, Táchira · @mdj_soccer · WhatsApp +58 0414-714-6602',
+      contentX, footerY, { width: contentWidth - 75 }
+    );
+    doc.text(`Página ${pageNumber}`, contentX + contentWidth - 70, footerY, { width: 70, align: 'right' });
+  };
+
+  drawPageHeader();
+  if (!products.length) {
+    doc.roundedRect(contentX, doc.y, contentWidth, 64, 8).fill('#f8fbff').strokeColor('#dbe5f1').stroke();
+    doc.fillColor('#475569').fontSize(11).text('No hay productos disponibles en el catálogo por el momento.', contentX + 20, doc.y + 25, {
+      width: contentWidth - 40,
+      align: 'center'
+    });
+  } else {
+    products.forEach((product, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2) % 3;
+      if (index > 0 && index % 6 === 0) {
+        drawPageFooter();
+        doc.addPage();
+        pageNumber += 1;
+        drawPageHeader();
+      }
+      const cardX = contentX + column * (cardWidth + columnGap);
+      const cardY = 116 + row * (cardHeight + 12);
+      const discount = Math.min(100, Math.max(0, Number(product.discount_percent || 0)));
+      const priceUsd = Number(product.final_price ?? Number(product.price) * (1 - discount / 100));
+      const stockSizes = Object.entries(product.stock_by_size || {})
+        .filter(([, quantity]) => Number(quantity) > 0)
+        .map(([size]) => size);
+
+      doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 9)
+        .fill(index % 2 === 0 ? '#f8fbff' : '#f1f6fc')
+        .strokeColor('#dbe5f1').stroke();
+      doc.roundedRect(cardX, cardY, 6, cardHeight, 3).fill('#2563eb');
+      if (photos[index]) {
+        doc.image(photos[index], cardX + 14, cardY + 13, { fit: [cardWidth - 28, 82], align: 'center', valign: 'center' });
+      } else {
+        doc.roundedRect(cardX + 14, cardY + 13, cardWidth - 28, 82, 5).fill('#e2e8f0');
+        doc.fillColor('#64748b').fontSize(8).text('Imagen no disponible', cardX + 14, cardY + 48, { width: cardWidth - 28, align: 'center' });
+      }
+      doc.fillColor('#0f2d52').fontSize(10.5).text(String(product.title || 'Camiseta'), cardX + 14, cardY + 104, {
+        width: cardWidth - 28,
+        height: 15,
+        ellipsis: true
+      });
+      doc.fillColor('#64748b').fontSize(8).text(
+        `${product.club?.name ? `${product.club.name} · ` : ''}${productTypeLabel(product.type, product.title)}`,
+        cardX + 14, cardY + 122, { width: cardWidth - 28, height: 12, ellipsis: true }
+      );
+      doc.fillColor('#0f766e').fontSize(9.5).text(`$${priceUsd.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, cardX + 14, cardY + 141);
+      doc.fillColor('#475569').fontSize(8).text(
+        `Bs ${(priceUsd * safeRate).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · ${Number(product.stock || 0) > 0 ? `Tallas: ${stockSizes.length ? stockSizes.join(', ') : 'consultar'}` : 'Agotada'}`,
+        cardX + 14, cardY + 158, { width: cardWidth - 28, height: 12, ellipsis: true }
+      );
+    });
+  }
+
+  drawPageFooter();
+  doc.end();
+  return await new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+};
+
 export const createInventoryPdf = async (products) => {
   const doc = new PDFDocument({ size: 'A4', margin: 36 });
   const chunks = [];
