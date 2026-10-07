@@ -573,6 +573,8 @@ export const initializeStore = async () => {
   await pool.query(`ALTER TABLE audit_logs ALTER COLUMN id SET DEFAULT nextval('audit_logs_id_seq');`);
 
   await seedDemoData();
+  await getDailyClosureState();
+  scheduleDailyClosureCheck();
 };
 
 export const seedDemoData = async () => {
@@ -1116,12 +1118,12 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
     }
     const orderRes = await client.query(
       `INSERT INTO orders (client_id, subtotal_amount, total_amount, discount_percent, payment_method, payment_plan, first_payment_amount, first_payment_currency, full_payment_amount, delivery_payment_amount, delivery_payment_currency, payment_proof_url, delivery_payment_proof_url, delivery_method, shipping_details, status, stock_reserved, exchange_rate, payment_received_at, delivery_payment_received_at, first_payment_exchange_rate, full_payment_exchange_rate, delivery_payment_exchange_rate)
-        VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, TRUE, $17,
+        VALUES ($1, $2, $3, $4, $5, $6::varchar, $7::numeric, $8::varchar, $9::numeric, $10::numeric, $11::varchar, $12, $13, $14, $15, $16, TRUE, $17::numeric,
           CASE WHEN $12::text IS NOT NULL OR $7 > 0 OR $9 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
           CASE WHEN $13::text IS NOT NULL OR $10 > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
-          CASE WHEN $6::varchar = 'installments' AND ($12::text IS NOT NULL OR $7 > 0) THEN $17 ELSE NULL END,
-          CASE WHEN $6::varchar = 'full' AND ($12::text IS NOT NULL OR $9 > 0) THEN $17 ELSE NULL END,
-          CASE WHEN $6::varchar = 'installments' AND ($13::text IS NOT NULL OR $10 > 0) THEN $17 ELSE NULL END)
+          CASE WHEN $6::varchar = 'installments' AND ($12::text IS NOT NULL OR $7 > 0) THEN $17::numeric ELSE NULL END,
+          CASE WHEN $6::varchar = 'full' AND ($12::text IS NOT NULL OR $9 > 0) THEN $17::numeric ELSE NULL END,
+          CASE WHEN $6::varchar = 'installments' AND ($13::text IS NOT NULL OR $10 > 0) THEN $17::numeric ELSE NULL END)
         RETURNING *`,
       [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || (normalizedDeliveryPaymentCurrency === 'BS' ? totalAmount * exchangeRate : totalAmount)) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
     );
@@ -1964,28 +1966,129 @@ const buildClosureSummary = async ({ periodType, periodLabel, startDate, endDate
 };
 
 const getDailyClosureState = async () => {
-  const result = await pool.query(`
-    SELECT
-      (SELECT value FROM system_settings WHERE key = 'daily_closure_open') AS is_open,
-      (SELECT value FROM system_settings WHERE key = 'daily_closure_started_at') AS started_at,
-      LOCALTIMESTAMP::text AS now,
-      (CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas')::date::text AS today,
-      (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') AT TIME ZONE 'America/Caracas' AT TIME ZONE current_setting('TIMEZONE'))::text AS today_start
-  `);
-  const row = result.rows[0];
-  const isOpen = row.is_open === null ? true : row.is_open === 'true';
-  let startedAt = row.started_at;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(784221906)');
+    const result = await client.query(`
+      SELECT
+        (SELECT value FROM system_settings WHERE key = 'daily_closure_open') AS is_open,
+        (SELECT value FROM system_settings WHERE key = 'daily_closure_started_at') AS started_at,
+        LOCALTIMESTAMP::text AS now,
+        (CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas')::date::text AS today,
+        (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'America/Caracas') AT TIME ZONE 'America/Caracas' AT TIME ZONE current_setting('TIMEZONE'))::text AS today_start,
+        CASE WHEN (SELECT value FROM system_settings WHERE key = 'daily_closure_started_at') IS NULL THEN NULL
+          ELSE to_char(
+            (SELECT value::timestamp FROM system_settings WHERE key = 'daily_closure_started_at')
+              AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas',
+            'YYYY-MM-DD'
+          )
+        END AS started_day
+    `);
+    const row = result.rows[0];
+    let isOpen = row.is_open === null ? true : row.is_open === 'true';
+    let startedAt = row.started_at;
 
-  if (!startedAt) {
-    startedAt = row.today_start;
-    await saveSystemSetting('daily_closure_started_at', startedAt);
-    await saveSystemSetting('daily_closure_open', 'true');
-  } else if (isOpen && startedAt.slice(0, 10) < row.today) {
-    startedAt = row.today_start;
-    await saveSystemSetting('daily_closure_started_at', startedAt);
+    if (!startedAt) {
+      startedAt = row.today_start;
+      await client.query(`
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('daily_closure_started_at', $1, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+      `, [startedAt]);
+      await client.query(`
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('daily_closure_open', 'true', NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+      `);
+      isOpen = true;
+    } else if (row.started_day < row.today) {
+      const dateAtUtcMidnight = (date) => new Date(`${date}T00:00:00.000Z`);
+      const toDateKey = (date) => date.toISOString().slice(0, 10);
+      const dateLabel = (date) => new Date(`${date}T12:00:00`).toLocaleDateString('es-VE');
+      let day = row.started_day;
+
+      while (day < row.today) {
+        const existingClosure = await client.query(`
+          SELECT 1
+          FROM daily_closures
+          WHERE period_type = 'day'
+            AND to_char(start_date AT TIME ZONE current_setting('TIMEZONE') AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD') = $1
+          LIMIT 1
+        `, [day]);
+        if (!existingClosure.rowCount) {
+          const nextDate = dateAtUtcMidnight(day);
+          nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+          const nextDay = toDateKey(nextDate);
+          const boundaryResult = await client.query(`
+            SELECT
+              ($1::date::timestamp AT TIME ZONE 'America/Caracas' AT TIME ZONE current_setting('TIMEZONE'))::text AS start_at,
+              ($2::date::timestamp AT TIME ZONE 'America/Caracas' AT TIME ZONE current_setting('TIMEZONE'))::text AS end_at
+          `, [day, nextDay]);
+          const startAt = day === row.started_day ? startedAt : boundaryResult.rows[0].start_at;
+          const endAt = boundaryResult.rows[0].end_at;
+          const summary = await buildClosureSummary({
+            periodType: 'day',
+            periodLabel: dateLabel(day),
+            startDate: startAt,
+            endDate: endAt
+          });
+          await client.query(`
+            INSERT INTO daily_closures (period_type, period_label, start_date, end_date, total_amount, orders_count, items_sold, details)
+            VALUES ('day', $1, $2, $3, $4, $5, $6, $7)
+          `, [
+            summary.periodLabel,
+            summary.startDate,
+            summary.endDate,
+            Number(summary.totalAmount).toFixed(2),
+            summary.ordersCount,
+            summary.itemsSold,
+            JSON.stringify({ orders: summary.orders, payments: summary.payments || [], paymentTotals: summary.paymentTotals || { USD: 0, BS: 0, totalUsd: 0 }, paymentOrdersCount: summary.paymentOrdersCount || 0 })
+          ]);
+        }
+        const nextDate = dateAtUtcMidnight(day);
+        nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+        day = toDateKey(nextDate);
+      }
+
+      startedAt = row.today_start;
+      await client.query(`
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('daily_closure_started_at', $1, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+      `, [startedAt]);
+      await client.query(`
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('daily_closure_open', 'true', NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+      `);
+      isOpen = true;
+    }
+
+    await client.query('COMMIT');
+    return { isOpen, startedAt, now: row.now, today: row.today };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
+};
 
-  return { isOpen, startedAt, now: row.now, today: row.today };
+const scheduleDailyClosureCheck = () => {
+  const nextMinute = new Date();
+  nextMinute.setSeconds(0, 0);
+  nextMinute.setMinutes(nextMinute.getMinutes() + 1);
+  const delay = Math.max(1000, nextMinute.getTime() - Date.now());
+  const timer = setTimeout(async () => {
+    try {
+      await getDailyClosureState();
+    } catch (error) {
+      console.error(`No se pudo ejecutar el cierre diario automático: ${error.message}`);
+    }
+    scheduleDailyClosureCheck();
+  }, delay);
+  timer.unref();
 };
 
 export const getDailyClosureReport = async () => {
