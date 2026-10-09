@@ -86,12 +86,12 @@ const drawInvoiceFooter = (doc, logoPath) => {
     doc.image(logoPath, 44, footerY + 7, { fit: [68, 54], align: 'center', valign: 'center' });
   }
   doc.fontSize(8.5).fillColor('#475569').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 115, footerY + 18);
-  doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 0414-827-4232', 115, footerY + 34);
+  doc.fontSize(8.5).fillColor('#475569').text('Teléfono: +58 04147146602', 115, footerY + 34);
 
   drawInstagramIcon(doc, 325, footerY + 27);
   doc.fontSize(8.5).fillColor('#2563eb').text('@mdj_soccer', 344, footerY + 30);
   drawWhatsappIcon(doc, 420, footerY + 26);
-  doc.fontSize(8.5).fillColor('#16a34a').text('+58 0414-827-4232', 445, footerY + 30);
+  doc.fontSize(8.5).fillColor('#16a34a').text('+58 04147146602', 445, footerY + 30);
 };
 
 export const createInvoicePdf = async (order, items, client, options = {}) => {
@@ -162,7 +162,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   drawSummaryCard(40, 252, 245, 90, 'Empresa', [
     'MDJ SOCCER',
     'mdjsoccer2026@gmail.com',
-    '+58 0414-827-4232'
+    '+58 04147146602'
   ]);
 
   drawSummaryCard(295, 252, 259, 90, 'Resumen', [
@@ -244,11 +244,11 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
     doc.image(logoImage, 44, footerY + 12, { fit: [64, 48], align: 'center', valign: 'center' });
   }
   doc.fillColor(textSoft).fontSize(8.5).text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', 120, footerY + 20);
-  doc.fillColor(textSoft).fontSize(8.5).text('Teléfono: +58 0414-827-4232', 120, footerY + 34);
+  doc.fillColor(textSoft).fontSize(8.5).text('Teléfono: +58 04147146602', 120, footerY + 34);
   drawInstagramIcon(doc, 345, footerY + 20);
   doc.fillColor('#2563eb').fontSize(8.5).text('@mdj_soccer', 366, footerY + 22);
   drawWhatsappIcon(doc, 440, footerY + 19);
-  doc.fillColor('#16a34a').fontSize(8.5).text('+58 0414-827-4232', 462, footerY + 22);
+  doc.fillColor('#16a34a').fontSize(8.5).text('+58 04147146602', 462, footerY + 22);
   const invoiceNote = isInstallmentOrder
     ? 'Factura con abono y saldo calculados según la tasa registrada en el pedido.'
     : 'Gracias por tu compra. Este documento confirma la transacción realizada en MDJ SOCCER.';
@@ -284,7 +284,7 @@ export const createApprovedOrdersPdf = async (orders, dateRange = null) => {
       doc.image(logoImage, contentX, footerY - 2, { fit: [52, 36], align: 'center', valign: 'center' });
     }
     doc.fontSize(8).fillColor('#64748b').text('MDJ SOCCER · San Cristóbal, Táchira, Venezuela', contentX + 62, footerY + 5);
-    doc.text('Teléfono: +58 0414-827-4232  ·  @mdj_soccer - Tienda Online', contentX + 62, footerY + 19);
+    doc.text('Teléfono: +58 04147146602  ·  @mdj_soccer - Tienda Online', contentX + 62, footerY + 19);
     doc.text(`Pedidos aceptados · Página ${pageNumber}`, contentX, footerY + 19, { width: contentWidth, align: 'right' });
   };
 
@@ -448,7 +448,7 @@ export const createCatalogPdf = async (products, exchangeRate) => {
   const drawPageFooter = () => {
     doc.moveTo(contentX, footerY - 12).lineTo(contentX + contentWidth, footerY - 12).strokeColor('#dbe5f1').stroke();
     doc.fontSize(8).fillColor('#64748b').text(
-      'MDJ SOCCER · San Cristóbal, Táchira · @mdj_soccer · WhatsApp +58 0414-827-4232',
+      'MDJ SOCCER · San Cristóbal, Táchira · @mdj_soccer · WhatsApp +58 04147146602',
       contentX, footerY, { width: contentWidth - 75 }
     );
     doc.text(`Página ${pageNumber}`, contentX + contentWidth - 70, footerY, { width: 70, align: 'right' });
