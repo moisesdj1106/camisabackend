@@ -168,7 +168,7 @@ export const createInvoicePdf = async (order, items, client, options = {}) => {
   drawSummaryCard(295, 252, 259, 90, 'Resumen', [
     `Tipo de cambio: ${exchangeRate.toFixed(2)} BS/USD`,
     `Fecha: ${new Date(order.created_at || Date.now()).toLocaleDateString('es-VE')}`,
-    `Entrega: ${order.delivery_method || 'No indicado'}`
+    `Entrega: ${order.delivery_method === 'national' ? 'Envío nacional' : order.delivery_method === 'personal' ? 'Entrega personal' : 'No indicado'}`
   ]);
 
   doc.fontSize(14).fillColor(accentBlue).text('Detalle de compra', 40, 356);
