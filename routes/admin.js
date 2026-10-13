@@ -192,6 +192,10 @@ adminRouter.get('/inventory/pdf', authMiddleware, adminOnly, async (_req, res) =
   }
 });
 
+adminRouter.get('/products', authMiddleware, adminOnly, async (_req, res) => {
+  res.json(await listProducts());
+});
+
 adminRouter.put('/products/discounts', authMiddleware, adminOnly, async (req, res) => {
   const discount = Number(req.body?.discount_percent);
   if (!Number.isFinite(discount) || discount < 0 || discount > 100) {

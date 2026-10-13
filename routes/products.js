@@ -7,7 +7,7 @@ export const productsRouter = express.Router();
 
 productsRouter.get('/', async (req, res) => {
   const { club, type, minPrice, maxPrice, q } = req.query;
-  const products = await listProducts({ club, type, minPrice, maxPrice, q });
+  const products = await listProducts({ club, type, minPrice, maxPrice, q, activeOnly: true });
   res.json(products);
 });
 
