@@ -1043,7 +1043,7 @@ export const deleteProduct = async (id) => {
   await pool.query('DELETE FROM products WHERE id = $1', [id]);
 };
 
-export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount = 0, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
+export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 'full', firstPaymentAmount = 0, firstPaymentCurrency = 'USD', fullPaymentAmount, deliveryPaymentAmount = 0, deliveryPaymentCurrency, paymentProofUrl, deliveryPaymentProofUrl, deliveryMethod, shippingDetails, status = 'pending' }) => {
   if (!Array.isArray(items) || items.length === 0) throw new Error('El carrito está vacío.');
   const allowedStatuses = new Set(['pending', 'approved', 'requires_info', 'preparing', 'ready_pickup', 'shipped', 'delivered', 'rejected', 'cancelled']);
   if (!allowedStatuses.has(status)) throw new Error('Estado de pedido inválido.');
@@ -1108,6 +1108,11 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
     });
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0);
     const totalAmount = subtotalAmount;
+    const normalizedFullPaymentAmount = paymentPlan === 'full'
+      ? fullPaymentAmount === undefined || fullPaymentAmount === null
+        ? normalizedDeliveryPaymentCurrency === 'BS' ? totalAmount * exchangeRate : totalAmount
+        : Number(fullPaymentAmount)
+      : 0;
     if (paymentPlan === 'installments') {
       const paidUsd = normalizedCurrency === 'BS'
         ? normalizedFirstPaymentAmount / Number(exchangeRate)
@@ -1125,7 +1130,7 @@ export const createOrder = async ({ userId, items, paymentMethod, paymentPlan = 
           CASE WHEN $6::varchar = 'full' AND ($12::text IS NOT NULL OR $9 > 0) THEN $17::numeric ELSE NULL END,
           CASE WHEN $6::varchar = 'installments' AND ($13::text IS NOT NULL OR $10 > 0) THEN $17::numeric ELSE NULL END)
         RETURNING *`,
-      [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', paymentPlan === 'full' ? Number(fullPaymentAmount || (normalizedDeliveryPaymentCurrency === 'BS' ? totalAmount * exchangeRate : totalAmount)) : 0, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
+      [userId, Number(subtotalAmount).toFixed(2), Number(totalAmount).toFixed(2), 0, paymentMethod, paymentPlan, normalizedFirstPaymentAmount, paymentPlan === 'installments' ? normalizedCurrency : 'USD', normalizedFullPaymentAmount, paymentPlan === 'installments' ? Number(deliveryPaymentAmount || 0) : 0, normalizedDeliveryPaymentCurrency, paymentProofUrl || null, deliveryPaymentProofUrl || null, deliveryMethod, shippingDetails || null, status, Number(exchangeRate).toFixed(2)]
     );
     const order = mapOrder(orderRes.rows[0]);
     for (const item of pricedItems) {
@@ -1163,13 +1168,13 @@ export const createOrderManually = async ({ adminUserId, clientData, items, paym
   if (paymentPlan === 'installments' && (!Number.isFinite(Number(firstPaymentAmount)) || Number(firstPaymentAmount) <= 0 || !['USD', 'BS'].includes(String(firstPaymentCurrency).toUpperCase()))) {
     throw new Error('Indica un monto válido para el primer pago y su moneda.');
   }
-  if (paymentPlan === 'full' && (!Number.isFinite(Number(fullPaymentAmount)) || Number(fullPaymentAmount) <= 0)) {
-    throw new Error('Indica el monto recibido por el pago completo.');
+  if (paymentPlan === 'full' && (!Number.isFinite(Number(fullPaymentAmount)) || Number(fullPaymentAmount) < 0)) {
+    throw new Error('Indica un monto recibido válido para el pago completo.');
   }
   if (paymentPlan === 'installments' && deliveryPaymentProofUrl && (!Number.isFinite(Number(deliveryPaymentAmount)) || Number(deliveryPaymentAmount) <= 0)) {
     throw new Error('Indica el monto del pago final junto con su comprobante.');
   }
-  if (!paymentProofUrl) {
+  if (paymentPlan === 'installments' && !paymentProofUrl) {
     throw new Error('Adjunta el comprobante del primer pago.');
   }
   if (!['personal', 'national'].includes(deliveryMethod)) {
@@ -1890,7 +1895,7 @@ const getClosurePaymentEvents = async ({ startDate, endDate, calendarDates }) =>
       }
     } else {
       const storedAmount = Number(order.full_payment_amount || 0);
-      const amount = storedAmount > 0 ? storedAmount : totalUsd * (methodCurrency === 'BS' ? rate : 1);
+      const amount = storedAmount;
       const amountUsd = Math.max(0, toUsd(amount, methodCurrency, fullRate));
       paidUsd = amountUsd;
       if (amount > 0 && isWithinPeriod(order.first_payment_local)) {
@@ -2252,7 +2257,7 @@ export const getDashboardStats = async () => {
           WHEN is_confirmed AND payment_plan = 'full' THEN
             CASE WHEN full_payment_amount > 0
               THEN CASE WHEN method_is_bs THEN full_payment_amount / full_rate ELSE full_payment_amount END
-              ELSE total_usd
+              ELSE 0
             END
           WHEN is_confirmed AND payment_plan = 'installments' THEN
             CASE
